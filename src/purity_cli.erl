@@ -175,10 +175,10 @@ format_changed({error, F}) ->
 parse_args() ->
     Spec = [
         {purelevel, [
-                "--pure-level",
+                "--level",
                 {type, {intchoice, [1,2,3]}},
                 {default, 1},
-                {help, "Select purity criteria [default: 1]"}]},
+                {help, "Select one of three progressively stricter purity levels [default: 1]"}]},
         {output, [
                 "-o", "--output",
                 {help, "Write output to specified filename"}]},
