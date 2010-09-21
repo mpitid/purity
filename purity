@@ -1,0 +1,7 @@
+#!/bin/bash
+# Wrapper script for easier invocation of purity.
+
+source scripts/common
+
+erl_exec purity_cli main -extra $@
+

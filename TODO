@@ -1,0 +1,12 @@
+
+== TODO
+
+.Urgent
+
+.Sometime
+
+.Maybe
+- Make error handling pure, by passing errors/warnings around in the
+  state record
+
+// vim: set ft=asciidoc tw=72:

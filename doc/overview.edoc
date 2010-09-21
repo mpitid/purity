@@ -1,0 +1,189 @@
+
+            -*- html -*-
+
+     Purity overview page
+
+@author Michael Pitidis
+@copyright 2009-2010 Michael Pitidis, Kostis Sagonas
+@version {@version} (purity {@vsn})
+@title Purity - a lightweight side-effect analyser for Erlang programs
+
+@doc Purity is a static analyser which determines the purity of Erlang
+functions. It can be used as a standalone application, or as part of the
+Erlang compiler, to allow for user defined pure functions to be used as
+guards in Erlang programs.
+
+<ul>
+ <li>{@section Introduction}</li>
+ <li>{@section Getting started}</li>
+ <li>{@section Analysing your code}</li>
+ <ul><li>{@section Levels of Purity}</li></ul>
+ <li>{@section Purity API}</li>
+ <li>{@section Compatibility}</li>
+</ul>
+
+== Introduction ==
+
+Purity can be invoked from the command line with a helper script, as
+long as the `ERL_LIBS' environment variable points to the correct
+installation path. Assuming you have downloaded and compiled the purity
+distribution in the directory `$HOME/src/purity', you have to place a
+line like the following in your `$HOME/.bashrc' file:
+
+```export ERL_LIBS="$HOME/src/purity"'''
+
+Other shells offer similar mechanisms for setting environment variables.
+
+== Getting started ==
+
+To get started with Purity, one usually needs to create a Persistent
+Lookup Table (PLT) first. This should contain analysis results of
+frequently used libraries, such as parts of the Open Telecoms Platform
+(OTP). To create a PLT of some common OTP applications in the default
+location (`$HOME/.purity.plt') run the following:
+
+```purity --build-plt --quiet --apps erts stdlib kernel'''
+
+Any application in the Erlang code path can be added, as well as
+other directories containing BEAM files.
+
+== Analysing your code ==
+
+To test your own code, you can invoke purity in a similar way, with the
+`--apps' option, or just pass it any BEAM file you wish. Make sure these
+are compiled with `+debug_info' however. Alternatively you can also
+provide Erlang source files, but working with BEAM files is the
+preferred mode of operation, since this correctly handles header file
+includes and guarantees the lack of compilation errors.
+
+Assuming you are in your project directory and your built files are
+placed in the `ebin' directory:
+```purity --apps ebin'''
+
+or for source files:
+```purity src/*.erl'''
+
+You can increase the verbosity with the `-v' option, and collect
+statistics regarding the analysis results with the `-s <stats_file>'
+option. You can also see which functions are not known to the analysis
+with the `-m' option.
+
+```
+$ purity -v -m -s my_stats -o my_results src/*.erl
+
+Analyzing the following files:
+	src/cl_parser.erl
+	src/core_aliases.erl
+	src/purity_bifs.erl
+	src/purity_cli.erl
+	src/purity.erl
+	src/purity_hofs.erl
+	src/purity_plt.erl
+	src/purity_stats.erl
+	src/purity_utils.erl
+Loading PLT           ... done in 0m01.36s
+Traversing AST        ... done in 0m00.64s
+Propagating values    ... done in 0m01.12s
+Generating statistics ... done in 0m00.08s
+Analysis completed in 0m03.29s
+'''
+
+=== Levels of Purity ===
+
+Purity distinguishes between three properties which may classify a
+function as impure:
+
+<ol>
+<li>Presence of side-effects</li>
+<li>Dependencies on the environment of execution (non-determinism)</li>
+<li>Presence of exceptions</li>
+</ol>
+
+These are organised in a way so that they form progressively stricter
+criteria, which can be selected by the `--level' command line option.
+Level 1 will consider functions pure only if they lack side-effects.
+Level 2 will add a further constraint, that functions should also lack
+dependencies on the execution environment. Finally, level 3 will also
+require that functions may never raise an exception of any type. The
+default is level 1.
+
+An example will better illustrate this. Consider the following three
+functions:
+
+```
+-module(example).
+
+may_raise(X) ->
+    42 / X.
+
+read(Val) ->
+    get(key).
+
+write(Val) ->
+    put(key, Val).
+'''
+
+Depending on the value of the `--level' command line option, the results
+of the analysis will vary in the following ways:
+
+```
+$ purity example.erl
+Results:
+example:may_raise/1 true.
+example:read/1 true.
+example:write/1 {false,"call to impure erlang:put/2"}.
+
+$ purity example.erl --level 2
+Results:
+example:may_raise/1 true.
+example:read/1 {false,"call to impure erlang:get/1"}.
+example:write/1 {false,"call to impure erlang:put/2"}.
+
+$ purity example.erl --level 3
+example:may_raise/1 {false,"call to impure erlang:'/'/2"}.
+example:read/1 {false,"call to impure erlang:get/1"}.
+example:write/1 {false,"call to impure erlang:put/2"}.
+'''
+
+Note how the difference in levels of purity produces different results
+for the functions. The `write/1' function will always be impure, because
+it modifies the execution environment (a side-effect). `The read/0'
+function on the other hand only depends on the execution environment
+(making it non-deterministic), and will thus require a level of at least
+2 to be considered impure. Finally, the `may_raise/1' function depends
+on the division operator, which in turn may raise an exception
+(arithmetic error or badarg), but is otherwise pure. Thus it will only be
+considered impure at level 3.
+
+== Purity API ==
+
+In order to use purity with your application, you will most likely need
+to call some of the functions in the {@link purity} and {@link
+purity_plt} modules.
+
+Have a look at the corresponding documentation, in particular the {@link
+purity:module/2}, {@link purity:module/3} and {@link purity:propagate/2}
+functions.
+
+Roughly, you should load a PLT if necessary, proceed to build a
+dependency list with a call to {@link purity:module/3}, and then derive
+concrete results with a call to {@link purity:propagate/2}. The result
+is a lookup table (a dict), indexed by a `{Module, Function, Arity}'
+tuple. You can perform simple boolean queries with {@link
+purity:is_pure/2}.
+
+== Compatibility ==
+
+Purity has been tested under Erlang R13 and Erlang R14.
+
+Purity has only been tested on Debian GNU/Linux so far, but it should
+work fine on most GNU/Linux distributions and other Unix systems
+supported by Erlang. Non-Unix systems are theoretically supported, but
+have not been tested. To invoke purity without the script wrapper from
+the command line, execute:
+
+```erl -noshell -run purity_cli main -extra <ARGS>'''
+
+where `<ARGS>' represents any files or command line arguments you wish
+to pass to it.
+

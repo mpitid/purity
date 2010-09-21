@@ -1,0 +1,78 @@
+#!/bin/zsh
+
+## Strip comments and lines with undefined functions.
+strip_bare() {
+    sed '/^#/ d;
+         /^.\+[ \t]\+.\+$/ p;
+         d' $@
+}
+
+## Expand aliases for pureness values.
+expand_purity() {
+    sed '
+      s/[ \t]\+false$/ {false,"BIF"}/;
+      s/[ \t]\+ex$/ [exceptions]/;
+      s/[ \t]\+se$/ [side_effects]/;
+      s/[ \t]\+nd$/ [non_determinism]/;
+      ' $@
+}
+
+convert() {
+    sed '
+      s/^/is_pure(/;
+      s/[ \t]\+/) -> \n    /;
+      s/$/;/
+      ' $@
+}
+
+select_funs() {
+    sed '/^[^,]\+,[^,]\+,[0-9]\+[ \t]\+/p; d' $@
+}
+
+select_primops() {
+    sed '/^[^,]\+,[0-9]\+[ \t]\+/p; d' $@
+}
+
+header() {
+    cat <<EOF
+-module(purity_bifs).
+-export([is_pure/3, is_known/3, is_pure/2, is_known/2]).
+
+%% Dialyzer complains of supertypes.
+%-spec is_pure(atom(), atom(), arity()) -> purity:pure() | unknown.
+-spec is_known(atom(), atom(), arity()) -> boolean().
+
+%-spec is_pure(atom(), arity()) -> purity:pure() | unknown.
+-spec is_known(atom(), arity()) -> boolean().
+
+EOF
+}
+
+footer1() {
+    cat <<EOF
+is_pure(M, F, A) when is_atom(M), is_atom(F), A >= 0, A =< 255 ->
+  unknown.
+
+is_known(M, F, A) ->
+  is_pure(M, F, A) =/= unknown.
+
+EOF
+}
+
+footer2() {
+    cat <<EOF
+is_pure(P, A) when is_atom(P), A >= 0, A =< 255 ->
+  unknown.
+
+is_known(P, A) ->
+  is_pure(P, A) =/= unknown.
+EOF
+}
+
+if [[ -n $@ ]]; then
+    header
+    strip_bare $@ | select_funs | expand_purity | convert
+    footer1
+    strip_bare $@ | select_primops | expand_purity | convert
+    footer2
+fi

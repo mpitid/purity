@@ -1,0 +1,21 @@
+
+# Binaries and intermediate files:
+*.beam
+.*.swp
+*~
+ebin/*.app
+
+# Documentation related:
+doc/edoc-info
+doc/*.html
+doc/*.png
+doc/*.css
+!doc/style.css
+README.html
+
+# Byproducts of coredump script:
+*.{core,dump,labl}
+
+# etags
+TAGS
+

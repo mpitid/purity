@@ -1,0 +1,6 @@
+## Tab or space separated list of Primops and their hard-coded purity.
+## Refer to `bifs' for a more thorough explanation.
+bs_context_to_binary,1	true
+bs_init_writable,1      true
+match_fail,1		ex
+raise,2			ex

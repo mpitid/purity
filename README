@@ -1,0 +1,79 @@
+
+Purity
+======
+Michael Pitidis <mpitid@gmail.com>
+
+Purity is a static analyzer which determines the purity of Erlang
+functions. It can be used as a standalone application or as part of
+other applications, through a simple API.
+
+Installation
+------------
+After retrieving a copy of the source code with
+
+---------------
+git clone git://github.com/mpitid/purity.git
+---------------
+
+change into the `purity` directory and run `make` to build the code.
+
+Currently there is no mechanism for automated installation, so you will
+have to do the following manually:
+
+Add the directory to the `ERL_LIBS` environment variable. Assuming you
+cloned the code to your home directory, something like the following
+will suffice:
+
+--------------------------------
+export ERL_LIBS="$HOME/purity"
+--------------------------------
+
+Bash users may place this directive in their `$HOME/.bashrc` file, so
+that it's executed upon login.
+
+You also need to place a copy of the `purity` script in the toplevel
+directory to some other directory in your `PATH`, for instance
+`/usr/local/bin`. Alternatively you can add the cloned directory to the
+`PATH` environment variable as well, with
+
+--------------------------------
+export PATH="$PATH:$HOME/purity"
+--------------------------------
+
+To sum up, these are the complete instructions for a user of the bash
+shell:
+
+--------------------------------
+git clone git://github.com/mpitid/purity.git
+cd purity
+make
+echo ERL_LIBS="`pwd`" >> $HOME/.bashrc
+echo PATH=\$PATH:`pwd` >> $HOME/.bashrc
+source $HOME/.bashrc
+--------------------------------
+
+Purity has only been tested on Debian GNU/Linux so far.
+
+Usage
+-----
+
+Consult the 'edoc' overview in the `doc/` directory.
+
+Licence
+-------
+
+Purity
+Copyright (c) 2009-2010, Michael Pitidis, Kostis Sagonas
+
+Purity is distributed under the GNU Lesser General Public License
+(LGPL).  This means that you can link Purity into proprietary
+applications, provided you follow the rules stated in the LGPL.  You can
+also modify Purity; if you distribute a modified version, you must
+distribute it under the terms of the LGPL, which in particular means
+that you must release the source code for the modified software.  See
+COPYING for more information.
+
+include::TODO[tabsize=4]
+include::changelog[tabsize=4]
+
+// vim: set ft=asciidoc tw=72:

@@ -1,0 +1,19 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%% vim: set ft=erlang ts=4 sw=4 et:
+%%! -sname findsrc
+%%% Print the full path to the source code of the module specified.
+
+main([Module]) ->
+    case filename:find_src(list_to_atom(Module)) of
+        {error, {Rsn, Mod}} ->
+            io:format(standard_error,
+                "Could not locate source for module '~s' (~p).~n", [Mod, Rsn]),
+            halt(1);
+        {Path, _Options} ->
+            io:format("~s.erl~n", [Path])
+    end;
+main(_) ->
+    io:format("usage: ~s module~n", [filename:basename(escript:script_name())]),
+    halt(1).
+

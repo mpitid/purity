@@ -1,0 +1,17 @@
+## Tab or space separated list of MFAs and their hard-coded purity.
+## This file has functions which, while not BIFs, are useful to have hard-coded.
+## Refer to the `bifs' for a more thorough explanation of the format.
+# vim: set noet ts=8:
+## erlang
+erlang,apply,2	[{arg,1}]
+erlang,spawn,1	se
+erlang,spawn,4	se
+erlang,integer_to_list,2		[{remote,{erlang,integer_to_list,1},[]}]
+erlang,list_to_integer,2		[{remote,{erlang,list_to_integer,1},[]}]
+erlang,localtime_to_universaltime,1	[{remote,{erlang,localtime_to_universaltime,2},[]}]
+erlang,max,2	true
+erlang,min,2	true
+## Some I/O funs, since tests don't operate on a complete PLT.
+io,getline,1	se
+## Many functions depend on this but we can't analyse it fully atm.
+io_lib,format,2	ex

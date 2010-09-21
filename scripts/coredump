@@ -1,0 +1,46 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -pa ebin -sname coredump
+%% vim: set ft=erlang ts=4 sw=4 et:
+
+main(Filenames) ->
+    lists:foreach(fun(F) -> dump(F) end, Filenames).
+
+dump(Filename) ->
+    try coredump(Filename) catch _:Error ->
+        io:format(standard_error, "Dumping of file '~s' failed (~p)~n",
+                  [Filename, Error])
+    end.
+
+%% Dump core erlang source and concrete representation to corresponding files.
+-spec coredump(string()) -> ok.
+
+coredump(Filename) ->
+    Options = [binary, copt, to_core, report_errors, report_warnings],
+    {ok, Module, Core} = case suffix(Filename) of
+        ".erl" ->
+            compile:file(Filename, Options);
+        ".beam" ->
+            {ok, Abs} = dialyzer_utils:get_abstract_code_from_beam(Filename),
+            compile:forms(Abs, Options)
+    end,
+    {Labeled, _} = cerl_trees:label(cerl:from_records(Core)),
+    Basename = atom_to_list(Module),
+    ok = write(Basename ++ ".core", core_pp:format(Core)),
+    ok = write(Basename ++ ".dump", Core),
+    ok = write(Basename ++ ".labl", Labeled).
+
+
+-spec write(string(), any()) -> ok.
+
+write(Filename, Data) ->
+    io:format("Writing to file ~p.~n", [Filename]),
+    Bytes = if is_list(Data) -> Data; true -> io_lib:format("~p~n", [Data]) end,
+    file:write_file(Filename, Bytes).
+
+
+-spec suffix(string()) -> string().
+
+suffix(Filename) ->
+    string:to_lower(filename:extension(Filename)).
+

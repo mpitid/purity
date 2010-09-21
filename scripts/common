@@ -1,0 +1,42 @@
+#!/bin/bash
+# vim: set et ts=4 sw=4:
+
+erl_exec() {
+    erl -pa ebin -noshell -run $@
+}
+
+die() {
+    echo >&2 "Fatal: $@"
+    exit 1
+}
+
+make_tempfile() {
+    mktemp $@ || die "Could not create temporary file."
+}
+
+# Strip .erl suffix.
+strip_suffix() {
+    echo ${@/.erl/}
+}
+
+# Generate usage function, without all the boilerplate.
+make_usage() {
+    name=$(basename $0)
+    short=$1
+    description=()
+    shift
+    for line in "$@"; do
+        description+=("echo -e \"   $line\";")
+    done
+
+    eval "`cat <<EOF
+usage() {
+    echo;
+    echo "usage $name: $short";
+    echo;
+    ${description[@]}
+    echo;
+    exit 1;
+}
+EOF`"
+}

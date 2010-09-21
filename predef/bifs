@@ -1,0 +1,402 @@
+## Tab or space separated list of MFAs and their hard-coded purity.
+# Empty lines and those starting with # are ignored.
+# `se' stands for Side-Effect
+# `nd' stands for Non-Determinism
+# `ex' stands for Exceptions
+# While possible for `ex' to complement `nd', the current implementation
+# will always consider 'ex' impure iff 'nd' is also impure.
+# When it is not clear whether a value has side-effects, it will
+# be simply marked with `false'.
+binary,at,2		ex
+binary,bin_to_list,1	ex
+binary,bin_to_list,2	ex
+binary,bin_to_list,3	ex
+binary,compile_pattern,1	ex
+binary,copy,1
+binary,copy,2
+binary,decode_unsigned,1
+binary,decode_unsigned,2
+binary,encode_unsigned,1
+binary,encode_unsigned,2
+binary,first,1
+binary,last,1
+binary,list_to_bin,1
+binary,longest_common_prefix,1
+binary,longest_common_suffix,1
+binary,match,2
+binary,match,3
+binary,matches,2
+binary,matches,3
+binary,part,2
+binary,part,3
+binary,referenced_byte_size,1
+
+code,get_chunk,2	se
+code,is_module_native,1	nd
+code,make_stub_module,3	se
+code,module_md5,1	nd
+
+erlang,'-',1		ex
+erlang,'+',1		ex
+erlang,'<',2		true
+erlang,'=<',2		true
+erlang,'==',2		true
+erlang,'=:=',2		true
+erlang,'=/=',2		true
+erlang,'>=',2		true
+erlang,'>',2		true
+erlang,'--',2		ex
+erlang,'-',2		ex
+erlang,'/=',2		true
+erlang,'/',2		ex
+erlang,'!',2		se
+erlang,'*',2		ex
+erlang,'+',2		ex
+erlang,'++',2		ex
+erlang,abs,1		ex
+erlang,adler32,1		ex
+erlang,adler32,2		ex
+erlang,adler32_combine,3	ex
+erlang,'and',2			ex
+erlang,append,2			ex
+erlang,append_element,2		ex
+## It's not possible to handle apply/3, since at compile time we cannot
+## resolve the actual function it calls (unknown arity). In all other
+## cases the compiler converts it to a direct call/3 primitive.
+erlang,apply,3              undefined
+erlang,atom_to_binary,2		ex
+erlang,atom_to_list,1		ex
+erlang,'band',2	    		ex
+erlang,binary_part,2		ex
+erlang,binary_part,3		ex
+erlang,binary_to_atom,2		ex
+erlang,binary_to_existing_atom,2	ex
+erlang,binary_to_list,1		ex
+erlang,binary_to_list,3		ex
+erlang,binary_to_term,1		ex
+erlang,binary_to_term,2		ex
+erlang,bit_size,1   		ex
+erlang,bitstring_to_list,1	ex
+erlang,blocking_read_file,1	nd
+erlang,'bnot',1			ex
+erlang,'bor',2			ex
+erlang,'bsl',2			ex
+erlang,'bsr',2			ex
+erlang,bump_reductions,1	se
+erlang,'bxor',2			ex
+erlang,byte_size,1		ex
+erlang,call_on_load_function,1	false
+erlang,cancel_timer,1		se
+erlang,check_process_code,2	nd
+erlang,crc32,1		ex
+erlang,crc32,2		ex
+erlang,crc32_combine,3	ex
+erlang,date,0		nd
+erlang,decode_packet,3	ex
+erlang,delete_module,1	se
+erlang,demonitor,1	    se
+erlang,demonitor,2	    se
+erlang,display,1	    se
+erlang,display_nl,0	    se
+erlang,display_string,1	se
+erlang,dist_exit,3      se
+erlang,'div',2		ex
+erlang,element,2	ex
+erlang,erase,0		se
+erlang,erase,1		se
+# error and exit are special, they represent exceptions.
+erlang,error,1		ex
+erlang,error,2		ex
+# nif_error is identical to error, its only use is to trick dialyzer.
+erlang,nif_error,1	ex
+erlang,nif_error,2	ex
+erlang,exit,1		ex
+erlang,exit,2		se
+erlang,external_size,1		true
+# I think this is called after an attemp to load some new code
+# and may remove that code if loading failed.
+erlang,finish_after_on_load,2	se
+erlang,float,1			ex
+erlang,float_to_list,1		ex
+# XXX: Not sure about these two. I guess since a module can be reloaded,
+# their results can vary across calls.
+erlang,function_exported,3	nd
+erlang,fun_info,2		nd
+erlang,fun_to_list,1		ex
+erlang,garbage_collect,0	se
+erlang,garbage_collect,1	se
+erlang,garbage_collect_message_area,0	se
+erlang,get,0		nd
+erlang,get,1		nd
+erlang,get_keys,1	nd
+erlang,get_module_info,1	nd
+erlang,get_module_info,2	nd
+erlang,get_stacktrace,0		nd
+erlang,group_leader,0		nd
+erlang,group_leader,2		se
+erlang,halt,0		se
+erlang,halt,1		se
+erlang,hash,2		ex
+erlang,hd,1		ex
+erlang,hibernate,3	se
+erlang,integer_to_list,1	ex
+erlang,iolist_size,1		ex
+erlang,iolist_to_binary,1	ex
+erlang,is_alive,0		nd
+erlang,is_atom,1		true
+erlang,is_binary,1		true
+erlang,is_bitstring,1	        true
+erlang,is_boolean,1		true
+erlang,is_builtin,3		ex
+erlang,is_float,1		true
+erlang,is_function,1	        true
+erlang,is_function,2	        ex
+erlang,is_integer,1		true
+erlang,is_list,1		true
+erlang,is_number,1		true
+erlang,is_pid,1			true
+erlang,is_port,1		true
+erlang,is_process_alive,1	nd
+erlang,is_record,2		true
+erlang,is_record,3		true
+erlang,is_reference,1		true
+erlang,is_tuple,1		true
+erlang,length,1			ex
+erlang,link,1			se
+erlang,list_to_atom,1		ex
+erlang,list_to_binary,1		ex
+erlang,list_to_bitstring,1	ex
+erlang,list_to_existing_atom,1	ex
+erlang,list_to_float,1		ex
+erlang,list_to_integer,1	ex
+erlang,list_to_pid,1		ex
+erlang,list_to_tuple,1		ex
+erlang,loaded,0			nd
+erlang,load_module,2		se
+erlang,load_nif,2		se
+erlang,localtime,0		nd
+erlang,localtime_to_universaltime,2	nd
+erlang,make_fun,3	ex
+# The reason this is a side-effect is because the hidden VM
+# state is altered with each call to make_ref/0.
+erlang,make_ref,0	se
+erlang,make_tuple,2	ex
+erlang,make_tuple,3	ex
+# No idea what this does.
+erlang,match_spec_test,3	false
+erlang,md5,1		ex
+erlang,md5_final,1	ex
+erlang,md5_init,0	ex
+erlang,md5_update,2	ex
+erlang,memory,0		nd
+erlang,memory,1		nd
+erlang,module_loaded,1	nd
+erlang,monitor,2	se
+erlang,monitor_node,2	se
+erlang,monitor_node,3	se
+erlang,node,0		nd
+erlang,node,1		nd
+erlang,nodes,1		nd
+erlang,'not',1		ex
+erlang,now,0		nd
+erlang,open_port,2	se
+erlang,'or',2		ex
+erlang,phash,2		ex
+erlang,phash2,1		ex
+erlang,phash2,2		ex
+erlang,pid_to_list,1	ex
+# Not sure how this port commands should be characterised.
+erlang,port_call,2	se
+erlang,port_call,3	se
+erlang,port_close,1	se
+erlang,port_command,2	se
+erlang,port_command,3	se
+erlang,port_connect,2	se
+erlang,port_control,3	se
+erlang,port_get_data,1	se
+erlang,port_info,1	nd
+erlang,port_info,2	nd
+erlang,ports,0		nd
+erlang,port_set_data,2		se
+erlang,port_to_list,1		ex
+erlang,pre_loaded,0		nd
+erlang,process_display,2	se
+erlang,processes,0		nd
+erlang,process_flag,2		se
+erlang,process_flag,3		se
+erlang,process_info,1		nd
+erlang,process_info,2		nd
+erlang,purge_module,1		se
+erlang,put,2		se
+erlang,raise,3		ex
+erlang,read_timer,1	nd
+erlang,ref_to_list,1	ex
+erlang,register,2	se
+erlang,registered,0	nd
+erlang,'rem',2		ex
+erlang,resume_process,1		se
+erlang,round,1		ex
+erlang,self,0		nd
+erlang,send,2		se
+erlang,send,3		se
+erlang,send_after,3		se
+erlang,seq_trace,2		se
+# The fact that this is rt is merely an assumption...
+erlang,seq_trace_info,1		nd
+# THe following two pass a message to the system_tracer
+erlang,seq_trace_print,1	se
+erlang,seq_trace_print,2	se
+erlang,setelement,3		ex
+erlang,setnode,2		se
+erlang,setnode,3		se
+erlang,size,1			ex
+erlang,spawn,3			se
+erlang,spawn_link,3		se
+erlang,spawn_opt,1		se
+erlang,split_binary,2		ex
+erlang,start_timer,3		se
+# Statistics has side-effects since it may return
+# the time passed from a previous call, hence it marks
+# the time when its called. Or does time since last call
+# stand for something else? XXX
+erlang,statistics,1		se
+erlang,subtract,2		ex
+erlang,suspend_process,2	se
+erlang,system_flag,2		se
+erlang,system_info,1		nd
+erlang,system_monitor,0		nd
+erlang,system_monitor,1		se
+erlang,system_monitor,2		se
+erlang,system_profile,0		nd
+erlang,system_profile,2		se
+erlang,term_to_binary,1		ex
+erlang,term_to_binary,2		ex
+erlang,throw,1			ex
+erlang,time,0			nd
+erlang,tl,1			ex
+erlang,trace,3			se
+erlang,trace_delivered,1	se
+erlang,trace_info,2		nd
+erlang,trace_pattern,2		se
+erlang,trace_pattern,3		se
+erlang,trunc,1			ex
+erlang,tuple_size,1		ex
+erlang,tuple_to_list,1		ex
+erlang,universaltime,0			nd
+erlang,universaltime_to_localtime,1	nd
+erlang,unlink,1		se
+erlang,unregister,1	se
+erlang,whereis,1	nd
+erlang,'xor',2		ex
+erl_ddll,demonitor,1		se
+# hmm, this is at least rt because of some peculiarities, but not sure in general.
+erl_ddll,format_error_int,1	false
+erl_ddll,info,2			nd
+erl_ddll,loaded_drivers,0	nd
+erl_ddll,monitor,2		se
+erl_ddll,try_load,3		se
+erl_ddll,try_unload,2		se
+error_logger,warning_map,0	nd
+erts_debug,breakpoint,2		se
+erts_debug,disassemble,1	false
+erts_debug,display,1		se
+erts_debug,dist_ext_to_term,2	false
+erts_debug,dump_links,1		false
+erts_debug,dump_monitors,1	false
+erts_debug,flat_size,1		true
+## Not really sure about this.
+erts_debug,get_internal_state,1	nd
+erts_debug,lock_counters,1	se
+erts_debug,same,2		true
+erts_debug,set_internal_state,2	se
+# XXX Refine, not so sure about the rt values.
+ets,all,0		nd
+ets,delete,1		se
+ets,delete,2		se
+ets,delete_all_objects,1	se
+ets,delete_object,2	se
+ets,first,1		nd
+ets,give_away,3		se
+ets,info,1		nd
+ets,info,2		nd
+ets,insert,2		se
+ets,insert_new,2	se
+ets,is_compiled_ms,1	true
+ets,last,1		nd
+ets,lookup,2		nd
+ets,lookup_element,3	nd
+ets,match,1		nd
+ets,match,2		nd
+ets,match,3		nd
+ets,match_object,1	nd
+ets,match_object,2	nd
+ets,match_object,3	nd
+ets,match_spec_compile,1	ex
+ets,match_spec_run_r,3		ex
+ets,member,2		nd
+ets,new,2		se
+ets,next,2		nd
+ets,prev,2		nd
+ets,rename,2		se
+ets,safe_fixtable,2	se
+ets,select,1		nd
+ets,select,2		nd
+ets,select,3		nd
+ets,select_count,2	nd
+ets,select_delete,2	se
+ets,select_reverse,1	nd
+ets,select_reverse,2	nd
+ets,select_reverse,3	nd
+ets,setopts,2		se
+ets,slot,2		nd
+ets,update_counter,3	se
+ets,update_element,3	se
+## Lists
+lists,keyfind,3		ex
+lists,keymember,3	ex
+lists,keysearch,3	ex
+lists,member,2		ex
+lists,reverse,2		ex
+## Math
+math,acos,1		ex
+math,acosh,1		ex
+math,asin,1		ex
+math,asinh,1		ex
+math,atan,1		ex
+math,atan2,2		ex
+math,atanh,1		ex
+math,cos,1		ex
+math,cosh,1		ex
+math,erf,1		ex
+math,erfc,1		ex
+math,exp,1		ex
+math,log,1		ex
+math,log10,1		ex
+math,pow,2		ex
+math,sin,1		ex
+math,sinh,1		ex
+math,sqrt,1		ex
+math,tan,1		ex
+math,tanh,1		ex
+
+# I presume this returns whether a process has the unicode
+# IO flag defined or not.
+net_kernel,dflag_unicode_io,1	nd
+
+os,getenv,0		nd
+os,getenv,1		nd
+os,getpid,0		nd
+os,putenv,2		se
+os,timestamp,0		nd
+
+re,compile,1		ex
+re,compile,2		ex
+re,run,2		ex
+re,run,3		ex
+
+string,to_float,1	true
+string,to_integer,1	true
+
+unicode,bin_is_7bit,1		true
+unicode,characters_to_binary,2	ex
+unicode,characters_to_list,2	ex
