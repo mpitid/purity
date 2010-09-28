@@ -4,6 +4,7 @@
 .*.swp
 *~
 ebin/*.app
+src/purity_bifs.erl
 
 # Documentation related:
 doc/edoc-info

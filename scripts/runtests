@@ -4,7 +4,7 @@
 scripts=$(dirname $0)
 source $scripts/common
 
-#PURITY_OPTS=(--pure-level 2) # or 3 for exceptions
+#PURITY_OPTS=(--level 2) # or 3 for exceptions
 PURITY_OPTS=()
 
 make_usage "[ options ] [ file(s).erl ]"\

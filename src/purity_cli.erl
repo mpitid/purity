@@ -175,7 +175,7 @@ format_changed({error, F}) ->
 parse_args() ->
     Spec = [
         {purelevel, [
-                "--level",
+                "-l", "--level",
                 {type, {intchoice, [1,2,3]}},
                 {default, 1},
                 {help, "Select one of three progressively stricter purity levels [default: 1]"}]},
@@ -303,11 +303,11 @@ get_lib_dirs(Libs) ->
 get_lib_dir(erts) ->
     filename:join([code:root_dir(), "erts", "preloaded", "ebin"]);
 get_lib_dir(Lib) ->
-    case code:lib_dir(Lib) of
+    case code:lib_dir(Lib, ebin) of
         {error, bad_name} ->
             atom_to_list(Lib);
         LibDir ->
-            filename:join(LibDir, "ebin")
+            LibDir
     end.
 
 flatten1(L) ->
