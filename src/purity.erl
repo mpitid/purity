@@ -801,24 +801,27 @@ spread_true(#spec{seed = [], table = Tab}) ->
     Tab;
 spread_true(#spec{seed = Seed0, prev = Set0, table = Tab0} = Sp) ->
     Tab1 = remove_from_ctx(Tab0, Seed0),
-    Set1 = lists:foldl(fun sets:add_element/2, Set0, Seed0),
-    Revs0 = [dict:find(F, Sp#spec.revdeps) || F <- Seed0],
-    Revs1 = [R || {ok, Rs} <- Revs0, R <- Rs],
-    Seed1 = ordsets:from_list([F || F <- Revs1,
-                                    not sets:is_element(F, Set1),
-                                    is_pure(dict:fetch(F, Tab1))]),
-    spread_true(Sp#spec{seed = Seed1, prev = Set1, table = Tab1}).
+    Set1 = add_elements(Seed0, Set0),
+    Revs = [D || F <- Seed0, D <- fetch_deps(F, Sp#spec.revdeps),
+                 not sets:is_element(D, Set1),
+                 is_pure(dict:fetch(D, Tab1))],
+    spread_true(Sp#spec{seed = lists:usort(Revs), prev = Set1, table = Tab1}).
 
 %% When propagating false results, also keep track of why each function is
 %% impure, i.e. the impure functions/constructs it depends on. Note that some
 %% dependencies are lost however, because they are in the prev set.
 spread_false(#spec{seed = [], table = Tab}) ->
     Tab;
-spread_false(#spec{seed = Seed0, table = Tab, prev = Set} = Sp) ->
+spread_false(#spec{seed = Seed0, table = Tab, prev = Set0} = Sp) ->
     Deps = [{F, fetch_deps(F, Sp#spec.revdeps)} || F <- Seed0],
-    Seed1 = [D || {_F, Ds} <- Deps, D <- Ds, not sets:is_element(D, Set)],
-    spread_false(Sp#spec{seed = Seed1,
-                         prev = add_elements(Seed0, Set),
+    Set1 = add_elements(Seed0, Set0),
+    %% Using Set0 instead of Set1 here should not influence the final
+    %% outcome. However it would keep track of impure reasons in more
+    %% detail, but it would also be slower, since more iterations are
+    %% required.
+    Seed1 = lists:usort([D || {_F, Ds} <- Deps, D <- Ds,
+                              not sets:is_element(D, Set0)]),
+    spread_false(Sp#spec{seed = Seed1, prev = Set1,
                          table = update(Tab, with_reasons(Deps))}).
 
 add_elements(Elements, Set) ->
