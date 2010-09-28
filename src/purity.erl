@@ -161,7 +161,6 @@ load_plt_silent(Opts) ->
 %% pureness values.
 -record(spec, {seed = []         :: [mfa()],
                prev = sets:new() :: set(),
-               reasons           :: dict(),
                revdeps           :: dict(),
                table             :: dict()}).
 
@@ -776,7 +775,7 @@ propagate(Tab0, Opts) ->
 %% take more than one function as argument, or have other dependencies
 %% as well.
 propagate_loop(#spec{table = Tab0, revdeps = RevDeps} = Sp) ->
-    Tab1 = spread_false(collect_reasons(Sp#spec{seed = collect_impure(Tab0)})),
+    Tab1 = spread_false(Sp#spec{seed = collect_impure(Tab0)}),
     Tab2 = spread_true(Sp#spec{seed = collect_pure(Tab1), table = Tab1}),
     Tab3 = dict:map(fun(_F, V) -> call_site_analysis(V, Tab2) end, Tab2),
     Graph = purity_hofs:make_arg_graph(Tab3, RevDeps),
@@ -815,18 +814,34 @@ spread_true(#spec{seed = Seed0, prev = Set0, table = Tab0} = Sp) ->
 %% dependencies are lost however, because they are in the prev set.
 spread_false(#spec{seed = [], table = Tab}) ->
     Tab;
-spread_false(#spec{seed = Seed0, table = Tab0, prev = Set0} = Sp) ->
-    Vals = [{F, {false, dict:fetch(F, Sp#spec.reasons)}} || F <- Seed0],
-    Tab1 = update(Tab0, Vals),
-    Set1 = lists:foldl(fun sets:add_element/2, Set0, Seed0),
-    Rev0 = [{F, dict:find(F, Sp#spec.revdeps)} || F <- Seed0],
-    %% Filter the ones which have any, and reverse again.
-    Rev1 = [{R, F} || {F, {ok, Rs}} <- Rev0, R <- Rs],
-    Rs = lists:foldl(fun({R,F}, D) -> dict_cons(R, F, D) end, dict:new(), Rev1),
-    Seed1 = [F || F <- dict:fetch_keys(Rs), not sets:is_element(F, Set1)],
-    spread_false(Sp#spec{seed = Seed1, prev = Set1, table = Tab1,
-                         reasons = dict:map(fun(_, Ds) -> fmt(Ds) end, Rs)}).
+spread_false(#spec{seed = Seed0, table = Tab, prev = Set} = Sp) ->
+    Deps = [{F, fetch_deps(F, Sp#spec.revdeps)} || F <- Seed0],
+    Seed1 = [D || {_F, Ds} <- Deps, D <- Ds, not sets:is_element(D, Set)],
+    spread_false(Sp#spec{seed = Seed1,
+                         prev = add_elements(Seed0, Set),
+                         table = update(Tab, with_reasons(Deps))}).
 
+add_elements(Elements, Set) ->
+    lists:foldl(fun sets:add_element/2, Set, Elements).
+
+fetch_deps(Key, DepMap) ->
+    case dict:find(Key, DepMap) of
+        {ok, Deps} ->
+            Deps;
+        error ->
+            []
+    end.
+
+%% @doc Convert a list of impure functions and their reverse dependencies
+%% to a list of those dependencies annotated with the reason they are impure.
+with_reasons(Vals) ->
+    %% Map each dep back to the list of functions it depends on, to form
+    %% the reason of impurity.
+    D = lists:foldl(fun map_reverse/2, dict:new(), Vals),
+    dict:fold(fun(F, Ds, A) -> [{F, {false, fmt(Ds)}} | A] end, [], D).
+
+map_reverse({F, Deps}, D0) ->
+    lists:foldl(fun(D, D1) -> dict_cons(D, F, D1) end, D0, Deps).
 
 fmt(Deps) ->
     %% Keep a list of sorted, unique references.
@@ -883,11 +898,6 @@ is_impure({false, _}) ->
     true;
 is_impure(_) ->
     false.
-
-collect_reasons(#spec{seed = Seed, table = Tab} = Sp) ->
-    Rs = [{F, dict:fetch(F, Tab)} || F <- Seed],
-    Vs = [{F, Rsn} || {F, {false, Rsn}} <- Rs],
-    Sp#spec{reasons = dict:from_list(Vs)}.
 
 
 higher_analysis(Fun, Val, Table, Graph) ->

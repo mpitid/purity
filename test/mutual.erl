@@ -13,7 +13,7 @@ d3() -> 1 + d2().
 d0() -> 0.
 
 % m1/1 {false,"call to impure mutual:m2/1"}
-% m2/1 {false,"call to impure erlang:'!'/2"}
+% m2/1 {false,"call to impure erlang:'!'/2, mutual:m1/1"}
 m1(Pid) -> m2(Pid).
 m2(Pid) -> m1(Pid), Pid ! 0.
 
