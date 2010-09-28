@@ -80,12 +80,12 @@ rev_mod_deps(Table) ->
         fun(_K, Mods) -> lists:usort(Mods) end,
         dict:fold(fun rev_mod_deps/3, dict:new(), Table)).
 
-rev_mod_deps({M,_,_}, Val, Deps) when is_list(Val) ->
+rev_mod_deps({M,_,_}, Val, Deps) ->
     lists:foldl(
         fun({K,_,_}, D) -> dict_cons(K, M, D) end,
         Deps,
         [F || F <- collect_dependencies(Val), is_concrete_fun(F)]);
-rev_mod_deps(_NonMFA, _orNonCtx, Deps) ->
+rev_mod_deps(_NonMFA, _Val, Deps) ->
     Deps.
 
 
@@ -136,7 +136,9 @@ collect_dependencies(Val, All) when is_list(Val) ->
             %% Collect functions that occur in the argument list as well.
             L2 = [Fun || {_Type, _Fun, Args} <- Val, {_, Fun} <- Args],
             rev_append(L2, L1)
-    end.
+    end;
+collect_dependencies(_NonCtx, _) ->
+    [].
 
 
 -spec is_mfa(term()) -> boolean().

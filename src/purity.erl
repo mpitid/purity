@@ -172,48 +172,50 @@ load_plt_silent(Opts) ->
 -spec find_missing(dict()) -> {[mfa()], [purity_utils:primop()]}.
 
 find_missing(Table) ->
-    Set1 = ordsets:from_list(collect_deps(Table)),
+    Set1 = ordsets:from_list(collect_function_deps(Table)),
     Set2 = ordsets:from_list(dict:fetch_keys(Table)),
     Funs = ordsets:subtract(Set1, Set2),
-    Set3 = ordsets:from_list(collect_primops(Table)),
+    Set3 = ordsets:from_list(collect_primop_deps(Table)),
     Prim = ordsets:subtract(Set3, Set2),
     {Funs, Prim}.
 
-
 %% Populate the Table with the purity of any BIF necessary.
 %% XXX: Not the cleanest approach, but it has the least impact for the moment.
-add_bifs(Table0) ->
-    Table1 = lists:foldl(
-        fun({M,F,A} = Key, TableN) ->
-                dict:store(Key, purity_bifs:is_pure(M, F, A), TableN) end,
-        Table0,
-        [Fun || {M,F,A} = Fun <- collect_deps(Table0),
-                purity_bifs:is_known(M, F, A)]),
+add_bifs(Tab) ->
     lists:foldl(
-        fun({P,A} = Key, TableN) ->
-                dict:store(Key, purity_bifs:is_pure(P, A), TableN) end,
-        Table1,
-        %% This way primops that BIFs may depend on are captured as well.
-        [Fun || {P, A} = Fun <- collect_primops(Table1),
-            purity_bifs:is_known(P, A)]).
+        fun(F, TabN) -> dict:store(F, is_bif_pure(F), TabN) end,
+        Tab, collect_bif_deps(Tab)).
 
+collect_function_deps(Tab) ->
+    collect_deps(Tab, fun purity_utils:is_concrete_fun/1).
 
-collect_deps(Table) ->
-    dict:fold(fun collect_deps/3, [], Table).
+collect_primop_deps(Tab) ->
+    collect_deps(Tab, fun purity_utils:is_primop/1).
 
-collect_deps(_, V, Acc) when is_list(V) ->
-    [F || {_,_,_} = F <- purity_utils:collect_dependencies(V),
-          purity_utils:is_concrete_fun(F)] ++ Acc;
-collect_deps(_, _, Acc) ->
-    Acc.
+collect_bif_deps(Tab) ->
+    collect_deps(Tab, fun is_bif/1).
 
-collect_primops(Table) ->
-    dict:fold(fun collect_primops/3, [], Table).
-collect_primops(_, V, Acc) when is_list(V) ->
-    [F || {_,_} = F <- purity_utils:collect_dependencies(V),
-        purity_utils:is_primop(F)] ++ Acc;
-collect_primops(_, _, Acc) ->
-    Acc.
+is_bif({M, F, A} = Fun) ->
+    purity_utils:is_concrete_fun(Fun) andalso purity_bifs:is_known(M, F, A);
+is_bif({P, A}=Pri) ->
+    purity_utils:is_primop(Pri) andalso purity_bifs:is_known(P, A);
+is_bif(_) ->
+    false.
+
+is_bif_pure({M, F, A}) ->
+    purity_bifs:is_pure(M, F, A);
+is_bif_pure({P, A}) ->
+    purity_bifs:is_pure(P, A).
+
+%% @doc Return a list of any functions other functions may depend on.
+%% Apply any filtering here instead of the result as an optimisation.
+collect_deps(Tab, Filter) ->
+    dict:fold(
+        fun(_, V, Acc) ->
+                [F || F <- purity_utils:collect_dependencies(V),
+                    Filter(F)] ++ Acc end,
+        [], Tab).
+
 
 %% @doc Re-analyse changed files and affected modules, update PLT.
 -spec analyse_changed(term(), purity_utils:options(), purity_plt:plt()) -> purity_plt:plt().
