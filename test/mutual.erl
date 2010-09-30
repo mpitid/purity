@@ -21,3 +21,19 @@ m2(Pid) -> m1(Pid), Pid ! 0.
 % m4/1 true
 m3(N) -> abs(N) + m4(N).
 m4(N) -> m3(N).
+
+%% This is an example of mutually recursive functions which cannot be
+%% resolved, showcasing why it is not enough to consider functions pure
+%% if all of their dependencies are in the same call graph cycle.
+%% While the first one is picked as a mutual candidate, it does not
+%% make it through the reduction step, since f2/0 has other unresolved
+%% dependencies too.
+
+% f1/0 [{local,{mutual,f2,0},[]}]
+f1() ->
+    f2().
+
+% f2/0 [{local,{mutual,f1,0},[]},{remote,{unknown,function,0},[]}]
+f2() ->
+    f1() + unknown:function().
+

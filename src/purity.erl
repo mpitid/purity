@@ -32,7 +32,8 @@
 -export([propagate/2, find_missing/1]).
 -export([analyse_changed/3]).
 
--import(purity_utils, [remove_args/1, fmt_mfa/1, dict_cons/3, filename_to_module/1]).
+-import(purity_utils, [fmt_mfa/1, str/2]).
+-import(purity_utils, [remove_args/1, dict_cons/3, filename_to_module/1]).
 
 -export_type([pure/0]).
 
@@ -157,12 +158,12 @@ load_plt_silent(Opts) ->
 -type state() :: #state{}.
 
 
-%% Necessary state for converting dependency lists to concrete
-%% pureness values.
--record(spec, {seed = []         :: [mfa()],
-               prev = sets:new() :: set(),
-               revdeps           :: dict(),
-               table             :: dict()}).
+%% State record for propagation of dependency lists to pureness values.
+-record(pst, {funs = []         :: [mfa()],
+              prev = sets:new() :: set(),
+              revs              :: dict(),
+              cycles            :: dict(),
+              table             :: dict()}).
 
 
 %% @doc Return a list of MFAs and a list of primops for which we have no
@@ -768,61 +769,72 @@ propagate(Tab0, Opts) ->
     end,
     KeyVals = lists:zip([side_effects, non_determinism, exceptions], Vals),
     Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals)),
-    converge_spec(#spec{revdeps = purity_utils:rev_deps(Tab1), table = Tab1}).
+    converge_pst(#pst{revs = purity_utils:rev_deps(Tab1), table = Tab1}).
 
 %% Higher order analysis should replace call_site analysis completely
 %% at some point, but currently it is still useful for functions which
 %% take more than one function as argument, or have other dependencies
 %% as well.
-propagate_loop(#spec{table = Tab0, revdeps = RevDeps} = Sp) ->
-    Tab1 = spread_false(Sp#spec{seed = collect_impure(Tab0)}),
-    Tab2 = spread_true(Sp#spec{seed = collect_pure(Tab1), table = Tab1}),
-    Tab3 = dict:map(fun(_F, V) -> call_site_analysis(V, Tab2) end, Tab2),
-    Graph = purity_hofs:make_arg_graph(Tab3, RevDeps),
-    Tab4 = dict:map(fun(F, V) -> higher_analysis(F, V, Tab3, Graph) end, Tab3),
-    Tab5 = update(Tab4, find_purely_mutual(Tab4), true),
-    Sp#spec{table = Tab5}.
+propagate_loop(#pst{table = Tab} = St0) ->
+    {Pure, Impure} = collect_concrete(Tab),
+    St1 = propagate_impure(St0#pst{funs = Impure}),
+    St2 = propagate_pure(St1#pst{funs = Pure}),
+    St3 = call_site_analysis(St2),
+    St4 = higher_analysis(St3),
+    St5 = mutual_analysis(St4),
+    St5.
 
-
-converge_spec(#spec{table = Tab} = Sp0) ->
-    case propagate_loop(Sp0) of
-        #spec{table = Tab} ->
+converge_pst(#pst{table = Tab} = St0) ->
+    case propagate_loop(St0) of
+        #pst{table = Tab} ->
             Tab;
-        Sp1 ->
-            converge_spec(Sp1)
+        St1 ->
+            converge_pst(St1)
     end.
 
+%% @doc Return two lists of functions with concrete values, one for 
+%% pure and one for impure ones.
+collect_concrete(Tab) ->
+    dict:fold(fun collect_concrete/3, {[], []}, Tab).
 
+collect_concrete(F, true, {Pure, Impure}) ->
+    {[F|Pure], Impure};
+collect_concrete(F, [], {Pure, Impure}) ->
+    {[F|Pure], Impure};
+collect_concrete(F, {false, _}, {Pure, Impure}) ->
+    {Pure, [F|Impure]};
+collect_concrete(_, _, Acc) ->
+    Acc.
 
-%% In order to generate the next seed we have to keep a set of any
-%% functions previously visited in order to avoid endless loops
-%% caused by mutually recursive functions.
-spread_true(#spec{seed = [], table = Tab}) ->
-    Tab;
-spread_true(#spec{seed = Seed0, prev = Set0, table = Tab0} = Sp) ->
-    Tab1 = remove_from_ctx(Tab0, Seed0),
-    Set1 = add_elements(Seed0, Set0),
-    Revs = [D || F <- Seed0, D <- fetch_deps(F, Sp#spec.revdeps),
+%% The set of previously visited functions is necessary in order
+%% to avoid endless loops caused by mutually recursive functions.
+propagate_pure(#pst{funs = []} = St) ->
+    St;
+propagate_pure(#pst{funs = Funs0, prev = Set0, table = Tab0} = St) ->
+    Tab1 = remove_from_ctx(Tab0, Funs0),
+    Set1 = add_elements(Funs0, Set0),
+    Deps = [D || F <- Funs0, D <- fetch_deps(F, St#pst.revs),
                  not sets:is_element(D, Set1),
                  is_pure(dict:fetch(D, Tab1))],
-    spread_true(Sp#spec{seed = lists:usort(Revs), prev = Set1, table = Tab1}).
+    propagate_pure(St#pst{funs = lists:usort(Deps), prev = Set1, table = Tab1}).
 
-%% When propagating false results, also keep track of why each function is
-%% impure, i.e. the impure functions/constructs it depends on. Note that some
-%% dependencies are lost however, because they are in the prev set.
-spread_false(#spec{seed = [], table = Tab}) ->
-    Tab;
-spread_false(#spec{seed = Seed0, table = Tab, prev = Set0} = Sp) ->
-    Deps = [{F, fetch_deps(F, Sp#spec.revdeps)} || F <- Seed0],
-    Set1 = add_elements(Seed0, Set0),
+%% When propagating impure results, try to keep track of the reason
+%% each function is impure, i.e. the impure expressions it directly
+%% depends on. Some of these are lost because they are contained in
+%% the previously visited set.
+propagate_impure(#pst{funs = []} = St) ->
+    St;
+propagate_impure(#pst{funs = Funs0, table = Tab, prev = Set0} = St) ->
+    Deps = [{F, fetch_deps(F, St#pst.revs)} || F <- Funs0],
+    Set1 = add_elements(Funs0, Set0),
     %% Using Set0 instead of Set1 here should not influence the final
     %% outcome. However it would keep track of impure reasons in more
     %% detail, but it would also be slower, since more iterations are
     %% required.
-    Seed1 = lists:usort([D || {_F, Ds} <- Deps, D <- Ds,
+    Funs1 = lists:usort([D || {_F, Ds} <- Deps, D <- Ds,
                               not sets:is_element(D, Set0)]),
-    spread_false(Sp#spec{seed = Seed1, prev = Set1,
-                         table = update(Tab, with_reasons(Deps))}).
+    propagate_impure(St#pst{funs = Funs1, prev = Set1,
+                            table = update(Tab, with_reasons(Deps))}).
 
 add_elements(Elements, Set) ->
     lists:foldl(fun sets:add_element/2, Set, Elements).
@@ -876,20 +888,6 @@ remove_from_ctx(Table, Funs) ->
            (_F, Val) -> Val end,
         Table).
 
-collect_pure(Table) ->
-    collect_funs(fun is_pure/1, Table).
-
-collect_impure(Table) ->
-    collect_funs(fun is_impure/1, Table).
-
-collect_funs(Pred, Table) ->
-    dict:fold(fun(Fun, Value, Acc) ->
-                case Pred(Value) of
-                    true -> [Fun|Acc];
-                    false -> Acc
-                end end,
-        [], Table).
-
 is_pure(true) ->
     true;
 is_pure([]) ->
@@ -897,11 +895,11 @@ is_pure([]) ->
 is_pure(_) ->
     false.
 
-is_impure({false, _}) ->
-    true;
-is_impure(_) ->
-    false.
 
+higher_analysis(#pst{table = Tab, revs = Rev} = St) ->
+    G = purity_hofs:make_arg_graph(Tab, Rev),
+    St#pst{table = dict:map(
+            fun(F, V) -> higher_analysis(F, V, Tab, G) end, Tab)}.
 
 higher_analysis(Fun, Val, Table, Graph) ->
     %purity_hofs:to_dot(Graph, str("graphs/graph_~4..0b.dot", [purity_utils:count(hofs)])),
@@ -915,6 +913,10 @@ higher_analysis(Fun, Val, Table, Graph) ->
             Val
     end.
 
+
+call_site_analysis(#pst{table = Tab} = St) ->
+    St#pst{table = dict:map(
+            fun(_, V) -> call_site_analysis(V, Tab) end, Tab)}.
 
 %% TODO:
 %% - Clean up if possible.
@@ -1017,70 +1019,80 @@ match_args([_|T1], L2, Matches, _Rem) -> %% Non-arg dependencies.
     match_args(T1, L2, Matches, true).
 
 
-%% @doc Return any function whose context dependencies are caused
-%% solely by mutual recursion.
+%% @doc Detect functions which remain unresolved solely because of
+%% mutually recursive dependencies.
+%%
+%% The process is started by selecting those functions whose sole
+%% dependencies are other functions in the same (call graph) cycle.
+%% Then, this set of functions is gradually reduced, by filtering
+%% out any functions whose dependencies are not themselves part of
+%% the set. Only the surviving functions can be safely marked pure.
+mutual_analysis(#pst{cycles = undefined, table = T} = St) ->
+    %% Cache mapping of mutually recursive functions to their cycle.
+    %% This is only a minor optimisation, the biggest gain is from
+    %% waiting up to this point in the propagation to built the map.
+    mutual_analysis(St#pst{cycles = build_cycle_map(T)});
+mutual_analysis(#pst{cycles = C, table = T} = St) ->
+    Funs = [F || {F, _} <- converge(fun mutual_selection/1,
+                                    mutual_candidates(C, T))],
+    St#pst{table = update(T, Funs, true)}.
 
--spec find_purely_mutual(dict()) -> [mfa()].
+mutual_candidates(Cycles, Tab) ->
+    dict:fold(fun(F, V, A) -> mutual_candidates(F, V, A, Cycles) end, [], Tab).
 
-find_purely_mutual(Table) ->
-    DG = dependency_graph(Table),
-    CM = cyclic_map(digraph_utils:cyclic_strong_components(DG)),
-    Seed = dict:fold(fun(F, V, A) -> find_seed(F, V, A, CM) end, [], Table),
-    %% Only keep elements whose dependencies are members of the same set.
-    Loop = fun(FunVals) ->
-            Set = sets:from_list([F || {F, _} <- FunVals]),
-            [V || {_, MFAs} = V <- FunVals,
-                  lists:all(fun(E) -> sets:is_element(E, Set) end, MFAs)] end,
-    [F || {F, _} <- converge(Loop, Seed)].
-
-%% @doc The initial mutual set is comprised of functions with only
-%% simple context dependencies, which happen to include at least
-%% one mutual dependency.
-find_seed(Fun, Ctx, Acc, CM) when is_list(Ctx) ->
-    case only_collect_deps(Ctx) of
-        failed ->
-            Acc;
-        Deps ->
-            case all_mutual(Fun, Deps, CM) of
+mutual_candidates(F, Ctx, Acc, CM) when is_list(Ctx) ->
+    case just_deps(Ctx, []) of
+        {ok, Deps} ->
+            case all_mutual(F, Deps, CM) of
                 true ->
-                    [{Fun, Deps}|Acc];
+                    [{F, Deps}|Acc];
                 false ->
                     Acc
-            end
+            end;
+        error ->
+            Acc
     end;
-find_seed(_, _, Acc, _) ->
+mutual_candidates(_, _, Acc, _) ->
     Acc.
 
--spec only_collect_deps([context()]) -> failed | [mfa()].
-only_collect_deps(Ctx) ->
-    lists:foldl(
-        fun(_C, failed) ->
-                failed;
-           ({_Type, {_,_,_}=MFA, _Args}, Set) ->
-                ordsets:add_element(MFA, Set);
-           (_C, _S) ->
-               failed end,
-        ordsets:new(),
-        Ctx).
+%% @doc If the dependency list consists exclusively of dependencies to
+%% other functions, return their MFAs, otherwise fail.
+just_deps([{_, {_,_,_} = F, _}|T], A) ->
+    just_deps(T, [F|A]);
+just_deps([], A) ->
+    {ok, lists:usort(A)};
+just_deps(_, _) ->
+    error.
 
-%% @doc Return true if all of the function's dependencies have
-%% a (mutual) dependency to the function as well.
--spec all_mutual(mfa(), [mfa()], dict()) -> boolean().
-all_mutual(Fun, MFAs, CM) ->
-    case dict:find(Fun, CM) of
-        {ok, _Cycle} = Result ->
-            lists:all(fun(F) -> dict:find(F, CM) =:= Result end, MFAs);
+all_mutual(Fun, Deps, Cycles) ->
+    case dict:find(Fun, Cycles) of
+        {ok, _CycleID} = Result ->
+            lists:all(fun(F) -> dict:find(F, Cycles) =:= Result end, Deps);
         error ->
             false
     end.
 
-converge(Function, Data) ->
-    case Function(Data) of
+mutual_selection(FunDeps) ->
+    Set = sets:from_list([F || {F, _} <- FunDeps]),
+    [V || {_, Deps} = V <- FunDeps,
+        lists:all(fun(D) -> sets:is_element(D, Set) end, Deps)].
+
+converge(Fun, Data) ->
+    case Fun(Data) of
         Data ->
             Data;
-        Other ->
-            converge(Function, Other)
+        Next ->
+            converge(Fun, Next)
     end.
+
+build_cycle_map(Tab) ->
+    cycle_map(digraph_utils:cyclic_strong_components(dependency_graph(Tab))).
+
+%% @doc Return a mapping of functions to the specific cycle in the call
+%% graph they are part of, if any.
+cycle_map(CyclicComponents) ->
+    %% There's no need to keep the actual cycles, just a unique reference.
+    dict:from_list([{F, N} || {N, CC} <- enumerate(CyclicComponents), F <- CC]).
 
 dependency_graph(Table) ->
     dict:fold(fun add_edges/3, digraph:new(), Table).
@@ -1096,11 +1108,6 @@ add_edges(Fun, Ctx, Graph) when is_list(Ctx) ->
 add_edges(_, _, Graph) ->
     Graph.
 
-%% @doc Return a mapping of functions to the list of cyclic components
-%% they are contained in.
-cyclic_map(CyclicComponents) ->
-    dict:from_list([{F, CC} || CC <- CyclicComponents, F <- CC]).
-
 
 %%% Various helpers. %%%
 
@@ -1112,10 +1119,6 @@ update(Table, Funs, Value) ->
 
 option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
-
-str(Fmt, Args) ->
-    lists:flatten(io_lib:format(Fmt, Args)).
-
 
 %% @doc Merge two dictionarys keeping values from the second one when
 %% conflicts arise.
