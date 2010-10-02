@@ -252,7 +252,7 @@ module(Core, Options, Tab0) ->
     Module = cerl:concrete(cerl:module_name(CoreLabels)),
     Defs = [{cerl:var_name(Var), Fun} || {Var, Fun} <- cerl:module_defs(CoreLabels)],
     Names = lists:foldl(
-        fun({{F,_},_}, Set) -> ordsets:add_element(F, Set) end,
+        fun({{F,_},_}, Set) -> ordsets:add_element(atom_to_list(F), Set) end,
         ordsets:new(),
         Defs),
     St0 = state_new(Options, Names, purity_utils:delete_modules(Tab0, [Module])),
@@ -620,21 +620,19 @@ letrec_analyse({MFA, Fun}, St0) ->
 
 -spec gen_fun_uid(cerl:c_fun(), state()) -> {mfa(), state()}.
 
-gen_fun_uid(Tree, #state{mfa = {M,F,_}, count = C, names = Names} = St) ->
+gen_fun_uid(Tree, #state{mfa = {M,F,A}, count = C0, names = Names} = St) ->
     true = cerl:is_c_fun(Tree),
-    A = cerl:fun_arity(Tree),
-    {Name, NC} = gen_fun_uid(F, C, Names),
-    {{M,Name,A}, St#state{count = NC}}.
-
--spec gen_fun_uid(atom(), pos_integer(), [atom()]) -> {atom(), pos_integer()}.
+    {Name, C1} = gen_fun_uid(str("~s_~B", [F, A]), C0, Names),
+    Uid = {M, Name, cerl:fun_arity(Tree)},
+    {Uid, St#state{count = C1}}.
 
 gen_fun_uid(Fun, Count, Names) ->
-    N = list_to_atom(str("~s-~B", [Fun, Count])),
+    N = str("~s-~B", [Fun, Count]),
     case ordsets:is_element(N, Names) of
         true ->
             gen_fun_uid(Fun, Count + 1, Names);
         false ->
-            {N, Count + 1}
+            {list_to_atom(N), Count + 1}
     end.
 
 
