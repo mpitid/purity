@@ -25,6 +25,7 @@
 %%% This module is loosely modeled after the `optparse' Python module,
 %%% but is significantly more limited.
 %%%
+%%% @todo: Handle multiple occurrences of the same option meaningfully.
 
 -module(cl_parser).
 
@@ -139,7 +140,7 @@ parse([], _, Options, Rest) ->
     {Options, Rest};
 parse(["--"|T], _Spec, Options, Rest) ->
     %% Stop interpreting options.
-    {Options, T ++ Rest};
+    {Options, lists:reverse(T, Rest)};
 parse(["-" ++ _ = Option|T], Spec, Options, Rest) ->
     OptName = strip_dashes(Option),
     assert_valid_option(Option, Spec),
