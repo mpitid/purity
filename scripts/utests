@@ -1,0 +1,22 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%% vim: set ft=erlang:
+%% Execute any unit tests for the specified modules.
+
+main([]) ->
+    io:format("usage: ~s module(s)~n",
+        [filename:basename(escript:script_name())]),
+    halt(1);
+main(Tests) ->
+    case lists:member(error, [test(T) || T <- Tests]) of
+        true ->
+            halt(1);
+        false ->
+            ok
+    end.
+
+test(Filename) ->
+    io:format("| Testing '~s'~n", [Filename]),
+    Module = list_to_atom(filename:rootname(filename:basename(Filename))),
+    eunit:test({inparallel, Module}).
+

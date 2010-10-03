@@ -37,6 +37,7 @@
 
 -export_type([pure/0]).
 
+-include("purity_tests.erl").
 
 %% Besides built-in functions, a select few of Erlang expressions
 %% may influence the purity if functions.
@@ -1109,29 +1110,27 @@ reduce([], Result) ->
     Result.
 
 
-find_matching_args(ArgDeps, Args) ->
-    case match_args(ArgDeps, Args, [], false) of
+find_matching_args(ArgDeps, DepArgs) ->
+    case match_args(ArgDeps, DepArgs, [], []) of
         {[], _} ->
             none;
-        {Matches, false} ->
-            {all, Matches};
-        {Matches, true} ->
-            {some, Matches}
+        {Matching, []} ->
+            {all, Matching};
+        {Matching, _Remaining} ->
+            {some, Matching}
     end.
 
-%% FIXME: Rewrite, don't depend on sorted context.
-match_args([{arg, N}|T1], [{N, MFA}|T2], Matches, Rem) ->
-    match_args(T1, T2, [MFA|Matches], Rem);
-match_args([{arg, N1}|_]=L1, [{N2, _}|T2], Matches, Rem) when N1 > N2 ->
-    match_args(L1, T2, Matches, Rem);
-match_args([{arg, N1}|T1], [{N2, _}|_]=L2, Matches, _Rem) when N1 < N2 ->
-    match_args(T1, L2, Matches, true);
-match_args([], _, Matches, Rem) ->
-    {Matches, Rem};
-match_args(_, [], Matches, _Rem) ->
-    {Matches, true};
-match_args([_|T1], L2, Matches, _Rem) -> %% Non-arg dependencies.
-    match_args(T1, L2, Matches, true).
+match_args([{arg,N}=Arg|T], Deps0, Matching, Remaining) ->
+    case lists:keytake(N, 1, Deps0) of
+        {value, {N, MFA}, Deps1} ->
+            match_args(T, Deps1, [MFA|Matching], Remaining);
+        false ->
+            match_args(T, Deps0, Matching, [Arg|Remaining])
+    end;
+match_args([NonArg|T], Deps, Matching, Remaining) ->
+    match_args(T, Deps, Matching, [NonArg|Remaining]);
+match_args([], _Deps, Matching, Remaining) ->
+    {lists:reverse(Matching), lists:reverse(Remaining)}.
 
 
 %% @doc Detect functions which remain unresolved solely because of

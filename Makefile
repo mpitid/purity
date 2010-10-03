@@ -1,6 +1,6 @@
 # vim: set noet ts=8 sw=8:
 
-.PHONY: clean count build_tests tests dialyzer_plt dialyzer docs
+.PHONY: units clean count build_tests tests dialyzer_plt dialyzer docs
 
 ERLC ?= erlc
 DIALYZER ?= dialyzer
@@ -47,9 +47,14 @@ $(EBIN)/%.beam: $(ESRC)/%.erl $(ESRC)/%.hrl
 	@echo " h  ERLC $<"
 	@$(ERLC) $(EFLAGS) -o $(EBIN) $<
 
+$(EBIN)/%.beam: $(ESRC)/%.erl $(ESRC)/%_tests.erl
+	@echo " t  ERLC $<"
+	@$(ERLC) $(EFLAGS) -o $(EBIN) $<
+
 $(EBIN)/%.beam: $(ESRC)/%.erl
 	@echo "    ERLC $<"
 	@$(ERLC) $(EFLAGS) -o $(EBIN) $<
+
 
 $(TEST)/%.beam: $(TEST)/%.erl
 	@echo "T  ERLC $<"
@@ -75,6 +80,10 @@ build_tests: $(TEST_BIN)
 
 tests: $(BIN) build_tests
 	$(SCRIPTS)/runtests $(TEST_SRC)
+
+units:
+	EFLAGS=-DTEST $(MAKE)
+	@./scripts/utests `echo src/*_tests.erl | sed 's/_tests//'`
 
 
 dialyzer: $(EBIN) $(BIN)
