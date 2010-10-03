@@ -138,6 +138,8 @@ load_plt_silent(Opts) ->
 %%            more effectively
 %% free     - An ordered set of free variables for the current function
 %%            (only relevant to nested functions of course)
+%% nested   - Keep track of the MFAs of any nested functions defined in
+%%            the body of the currently analysed one.
 %% count    - Counter for giving unique names to nested functions
 %% names    - Ordered set of reserved function names, for excluding them
 %%            from unique identifiers
@@ -150,6 +152,7 @@ load_plt_silent(Opts) ->
                 args    = map_new()  :: map(),
                 aliases = dict:new() :: dict(),
                 free    = []         :: [cerl:var_name()],
+                nested  = []         :: [mfa()],
                 count   = 1          :: pos_integer(),
                 names   = []         :: [atom()],
                 opts    = []         :: [any()],
@@ -258,6 +261,7 @@ module(Core, Options, Tab0) ->
     St0 = state_new(Options, Names, purity_utils:delete_modules(Tab0, [Module])),
     Fun = fun({{F,A}, Fun}, St) ->
             analyse(Fun, St#state{mfa = {Module, F, A},
+                                  nested = [],
                                   vars = map_new(),
                                   aliases = core_aliases:scan(Fun)}) end,
     St1 = lists:foldl(Fun, St0#state{names = Names}, Defs),
@@ -322,9 +326,8 @@ analyse(Function, St0) ->
                     free = cerl_trees:free_variables(Function),
                     count = 1},
     St2 = traverse(cerl:fun_body(Function), St1),
-    Ctx = postprocess_locals(St2),
-    #state{mfa = MFA, table = Tab} = St2,
-    St2#state{table = dict:store(MFA, Ctx, Tab), ctx = Ctx}.
+    St3 = promote_nested(St2#state{ctx = postprocess_locals(St2)}),
+    St3#state{table = dict:store(St3#state.mfa, St3#state.ctx, St3#state.table)}.
 
 
 fetch_arg_vars(Fun) ->
@@ -335,7 +338,7 @@ fetch_arg_vars(Fun) ->
 
 %% @doc Traverse a Core Erlang AST and collect necessary information
 %% in the form of a dependency list.
-traverse(Tree, #state{mfa = MFA, table = _Table, ctx = Ctx} = St0) ->
+traverse(Tree, #state{ctx = Ctx} = St0) ->
     case cerl:type(Tree) of
         seq ->
             Arg = cerl:seq_arg(Tree),
@@ -363,33 +366,19 @@ traverse(Tree, #state{mfa = MFA, table = _Table, ctx = Ctx} = St0) ->
             Op = cerl:apply_op(Tree),
             OpName = cerl:var_name(Op),
             Fun = resolve_fun_binding(OpName, St0),
-            case Fun of
-                MFA -> % Recursion
-                    St0;
-                _ ->
-                    case promote_free_deps(Fun, St0) of
-                        {ok, Fs} ->
-                            St0#state{ctx = lists:foldl(fun ctx_add/2, Ctx, Fs)};
-                        failed ->
-                            Args = harvest_args(cerl:apply_args(Tree), St0),
-                            St0#state{ctx = ctx_add({local, Fun, Args}, Ctx)}
-                    end
-            end;
+            Args = harvest_args(cerl:apply_args(Tree), St0),
+            St0#state{ctx = ctx_add({local, Fun, Args}, Ctx)};
         'call' ->
-            case call_mfa(Tree) of
-                MFA -> % Recursion
-                    St0;
-                CallMFA ->
-                    Args = harvest_args(cerl:call_args(Tree), St0),
-                    St0#state{ctx = ctx_add({remote, CallMFA, Args}, Ctx)}
-            end;
+            Args = harvest_args(cerl:call_args(Tree), St0),
+            St0#state{ctx = ctx_add({remote, call_mfa(Tree), Args}, Ctx)};
         'fun' ->
             %% This mostly comes from nested funs as return values, etc.
             %% There's not much use for these the way analysis is structured,
             %% but analyse them anyway, for maximum coverage.
             {FunMFA, St1} = gen_fun_uid(Tree, St0),
-            #state{table = Tab} = analyse(Tree, St1#state{mfa = FunMFA}),
-            St0#state{table = Tab};
+            #state{table = Tab, nested = Nst} =
+                analyse(Tree, St1#state{mfa = FunMFA}),
+            St0#state{table = Tab, nested = nst_add(FunMFA, Nst)};
         'let' ->
             handle_let(Tree, St0);
         primop ->
@@ -455,50 +444,107 @@ resolve_fun_binding(Var, #state{mfa = {M,_,_}} = St) ->
     end.
 
 
-%% @doc Try to promote dependencies to nested functions to the current one.
+%% @doc Flatten dependencies to nested functions.
 %%
-%% This only works for nested functions which depend on free variables, e.g:
-%% `filter(Pred, List) when is_function(Pred, 1) ->'
-%% `    [ E || E <- List, Pred(E) ].'
-%% Here, the nested function created for the list comprehension, depends on
-%% the free variable Pred, which, in the context of `filter/2' can be
-%% resolved to `{arg, 1}'.
-%% TODO: Make it work for arbitrary levels of nesting.
--spec promote_free_deps(mfa(), state()) -> {ok, [context()]} | failed.
-promote_free_deps(Fun, #state{table = Tab} = St) ->
-    case dict:find(Fun, Tab) of
-        {ok, [_|_]=Ctx} ->
-            Pred = fun({ok, _}) -> true; (error) -> false end,
-            case lists:partition(Pred, [lookup_free(C, St) || C <- Ctx]) of
-                {Resolved, []} ->
-                    {ok, [R || {ok, R} <- Resolved]};
-                _Unresolved ->
-                    failed
-            end;
-        _Other ->
-            failed
+%% Consider the following example: ``` a(F, L) -> [F(E) || E <- L]. '''
+%% The `a' function depends on the nested `a_2-1/1' function, which in
+%% turn depends on the free variable `F'. Since that variable is bound
+%% in the scope of `a', flattening the dependencies will resolve it to
+%% `{arg, 1}'. All other dependencies are propagated unchanged, with
+%% the exception of self calls which are transformed to self calls of
+%% the parent function in order to preserve the semantics of the analysis
+%% (in the case of HOFs, but also with regard to termination analysis
+%% which is not implemented yet).
+promote_nested(#state{mfa = Fun, ctx = Ctx} = St) ->
+    {Nested, Rest} = lists:partition(fun(D) -> is_nested(D, St) end, Ctx),
+    Promoted = lists:flatten([map_nested(Fun, N, St) || N <- Nested]),
+    St#state{ctx = ctx_rem(remove, ctx_add_many(Promoted, Rest))}.
+
+is_nested({_, Fun, _}, #state{nested = Nst}) ->
+    nst_mem(Fun, Nst);
+is_nested(_, _) ->
+    false.
+
+map_nested(Fun, {_, Dep, _} = Orig, #state{table = Tab} = St) ->
+    Vals = [map_nested(Fun, Dep, C, St) || C <- dict:fetch(Dep, Tab)],
+    case lists:member(unmappable, Vals) of
+        true ->
+            %% Some of the values failed to map, restore the original dep.
+            [Orig];
+        false ->
+            Vals
     end.
 
--spec lookup_free(context(), state()) ->
-    {ok, {local, mfa(), [ctx_arg()]} | arg_dep()} | error.
-lookup_free({free, {Var, Args}}, #state{} = St) ->
-    case lookup_var(Var, St) of
-        {ok, {_,_,_}=MFA} ->
-            {ok, {local, MFA, Args}};
-        error ->
-            case lookup_arg(Var, St) of
-                {ok, N} ->
-                    {ok, {arg, N}};
+map_nested(_, _, {free, {Var, _Args}} = Dep, St) ->
+    case is_free(Var, St) of
+        true -> %% Still a free variable, let the parents handle it.
+            Dep;
+        false -> %% Bind to argument or fail.
+            case lookup_free(Var, St) of
+                {ok, {arg, _} = NewDep} ->
+                    NewDep;
                 error ->
-                    error
+                    unmappable
             end
     end;
-%% XXX: Propagate primop dependencies, otherwise this does
-%% not work anymore. Not sure the right way to go though.
-lookup_free({primop, {_, _}, _} = P, _St) ->
-    {ok, P};
-lookup_free(_C, _St) ->
-    error.
+map_nested(Fun, _, {Type, Fun, Args} = Dep, St) ->
+    %% Dependency on the parent: this should be converted to recursion.
+    %% The arguments may contain free variables however, which could be
+    %% mapped to concrete arguments of the caller and make the recursive
+    %% dependency safe to remove later on.
+    case check_passed_args(Fun, Args, St) of
+        still_free ->
+            Dep;
+        unmappable ->
+            unmappable;
+        NewArgs ->
+            {Type, Fun, NewArgs}
+    end;
+map_nested(_Fun, Dep, {_, Dep, _}, _) ->
+    %% Recursion in the nested function. This can only happen with
+    %% `letrec', which is generated by Erlang for list comprehensions.
+    %% It may be considered terminating since it is over a finite list,
+    %% so we don't care about this dependency in any way.
+    remove;
+map_nested(_, _, {arg, _}, _) ->
+    %% Not much we can do if the nested function is a HOF.
+    unmappable;
+%% Everything else passes through unchanged, just being explicit.
+map_nested(_, _, {_, _, _} = Dep, _) ->
+    Dep;
+map_nested(_, _, {primop, _} = P, _) ->
+    P;
+map_nested(_, _, {erl, _} = E, _) ->
+    E.
+
+check_passed_args(_F, [], _St) ->
+    [];
+check_passed_args(Fun, [{N, {free, Var}}|T], St) ->
+    case is_free(Var, St) of
+        true ->
+            still_free;
+        false ->
+            case lookup_free(Var, St) of
+                error ->
+                    unmappable;
+                {ok, {arg, K}} ->
+                    case check_passed_args(Fun, T, St) of
+                        Args when is_list(Args) ->
+                            %% All arguments bound, epic win!
+                            [{arg, {K, N}}|Args];
+                        Fail when is_atom(Fail) ->
+                            Fail
+                    end
+            end
+    end.
+
+lookup_free(Var, #state{} = St) ->
+    case lookup_arg(Var, St) of
+        {ok, N} ->
+            {ok, {arg, N}};
+        error ->
+            error
+    end.
 
 %% @doc Convert unresolved local dependencies to positions in the
 %% in the argument list or mark as free variables, whenever possible.
@@ -547,9 +593,11 @@ handle_let(Tree, #state{vars = Vs} = St0) ->
             case cerl:type(Arg) of
                 'fun' ->
                     {FunMFA, St1} = gen_fun_uid(Arg, St0),
-                    #state{table = Tab} = analyse(Arg, St1#state{mfa = FunMFA}),
+                    #state{table = Tab, nested = Nst} =
+                        analyse(Arg, St1#state{mfa = FunMFA}),
                     %% Build on St1 because we need the updated count field.
-                    St1#state{table = Tab, vars = map_add(Name, FunMFA, Vs)};
+                    St1#state{table = Tab, vars = map_add(Name, FunMFA, Vs),
+                              nested = nst_add(FunMFA, Nst)};
                 'call' ->
                     case call_mfa(Arg) of
                         {erlang, make_fun, 3} ->
@@ -601,9 +649,11 @@ handle_letrec(Tree, #state{} = St0) ->
     Defs = cerl:letrec_defs(Tree),
     Body = cerl:letrec_body(Tree),
     {FunDefs, St1} = lists:foldl(fun letrec_names/2, {[], St0}, Defs),
-    #state{table = Tab} = lists:foldl(fun letrec_analyse/2, St1, FunDefs),
+    #state{table = Tab, nested = Nst} =
+        lists:foldl(fun letrec_analyse/2, St1, FunDefs),
     %% Analysis is continued with the old state.
-    traverse(Body, St1#state{table = Tab}).
+    traverse(Body, St1#state{table = Tab,
+                             nested = nst_add_many(unzip1(FunDefs), Nst)}).
 
 letrec_names({Var, Fun}, {Acc, #state{vars = Vs} = St0}) ->
     VarName = cerl:var_name(Var),
@@ -671,7 +721,12 @@ find_arg({N, Var}, #state{} = St, Acc)
                 {ok, From} ->
                     [{arg, {From, N}}|Acc];
                 error ->
-                    Acc
+                    case is_free(Var, St) of
+                        true -> %% Keep track of free vars passed as args
+                            [{N, {free, Var}}|Acc];
+                        false -> %% Give up...
+                            Acc
+                    end
             end
     end.
 
@@ -683,6 +738,21 @@ ctx_new() ->
 -spec ctx_add(context(), [context()]) -> [context()].
 ctx_add(Value, Ctx) ->
     ordsets:add_element(Value, Ctx).
+
+ctx_add_many(Values, Ctx) ->
+    lists:foldl(fun ctx_add/2, Ctx, Values).
+
+ctx_rem(Value, Ctx) ->
+    ordsets:del_element(Value, Ctx).
+
+nst_add(Val, Nst) ->
+    ordsets:add_element(Val, Nst).
+
+nst_add_many(Vals, Nst) ->
+    lists:foldl(fun nst_add/2, Nst, Vals).
+
+nst_mem(Val, Nst) ->
+    ordsets:is_element(Val, Nst).
 
 lookup_var(Name, #state{vars = VarMap} = St) ->
     Search = fun(N) -> map_lookup(N, VarMap) end,
@@ -766,7 +836,8 @@ propagate(Tab0, Opts) ->
             [Fse, Fnd, Fex]
     end,
     KeyVals = lists:zip([side_effects, non_determinism, exceptions], Vals),
-    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals)),
+    Tab1 = without_self_deps(
+        merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals))),
     converge_pst(#pst{revs = purity_utils:rev_deps(Tab1), table = Tab1}).
 
 %% Higher order analysis should replace call_site analysis completely
@@ -781,6 +852,48 @@ propagate_loop(#pst{table = Tab} = St0) ->
     St4 = higher_analysis(St3),
     St5 = mutual_analysis(St4),
     St5.
+
+
+%% Observing that only the purity of certain higher order functions
+%% may depend on recursive dependencies, remove them from all other
+%% cases to simplify the rest of the analysis.
+without_self_deps(Tab) ->
+    dict:map(fun without_self_deps/2, Tab).
+
+without_self_deps(F, C) when is_list(C) ->
+    case lists:any(fun arg_dep/1, C) of
+        true ->
+            %% Higher order function, it is not always safe to remove
+            %% the recursive dep in this case.
+            Expecting = [N || {arg, N} <- C],
+            [D || D <- C, not self_dep_same_arg(F, D, Expecting)];
+        false ->
+            [D || D <- C, not self_dep(F, D)]
+    end;
+without_self_deps(_, V) ->
+    V.
+
+%% A recursive call within a HOF can be safely ignored if the
+%% arguments passed to it are some permutation of the arguments
+%% expected as higher order functions, e.g.
+%% > a(F, G, A) -> G(F(A),..., a(F, G, _). or a(G, F, _).
+self_dep_same_arg(F, {_, F, Args}, Expecting) ->
+    ESet = ordsets:from_list(Expecting),
+    ASet = ordsets:from_list([N || {arg, {N, K}} <- Args,
+            ordsets:is_element(K, ESet)]),
+    ESet =:= ASet; %% Cheat a little on the comparison
+self_dep_same_arg(_F, _NonSelfDep, _) ->
+    false.
+
+self_dep(F, {_, F, _}) ->
+    true;
+self_dep(_, _) ->
+    false.
+
+arg_dep({arg, _}) ->
+    true;
+arg_dep(_) ->
+    false.
 
 converge_pst(#pst{table = Tab} = St0) ->
     case propagate_loop(St0) of
@@ -939,8 +1052,8 @@ call_site_analysis(Ctx0, Table) when is_list(Ctx0) ->
 call_site_analysis(Value, _Table) ->
     Value.
 
-call_site_analysis1({_Type, MFA, Args} = Value, Table) ->
-    case analyse_call(MFA, Args, Table) of
+call_site_analysis1({_Type, _MFA, _Args} = Value, Table) ->
+    case analyse_call(Value, Table) of
         failed ->
             Value;
         Result ->
@@ -950,10 +1063,14 @@ call_site_analysis1(Value, _Table) ->
     Value.
 
 %% @doc Return true/{false, Reason} or failed.
-analyse_call(CallMFA, Args, Table) ->
+analyse_call({_Type, CallMFA, Args} = Val, Table) ->
     case dict:find(CallMFA, Table) of
-        {ok, [_|_] = Ctx} ->
-            case find_matching_args(Ctx, Args) of
+        {ok, [_|_] = Ctx0} ->
+            %% Remove the value being resolved from the context. This can
+            %% happen in recursive HOFs which call themselves with concrete
+            %% values (i.e. CallMFA =:= Caller).
+            Ctx1 = ctx_rem(Val, Ctx0),
+            case find_matching_args(Ctx1, Args) of
                 none ->
                     failed;
                 %% The only way this can be resolved to a concrete value
@@ -1126,4 +1243,12 @@ merge(D1, D2) ->
 %% @doc Merge a non-empty list of dictionaries.
 merge([D0|Ds]) ->
     lists:foldl(fun merge/2, D0, Ds).
+
+%% @doc Extract the first elements from a list of tuples.
+unzip1(Items) ->
+    unzipN(1, Items).
+
+%% @doc Extract the Nth elements from a list of tuples.
+unzipN(N, Items) ->
+    [element(N, Tuple) || Tuple <- Items].
 

@@ -120,7 +120,7 @@ has_arg({arg, {_,_}} = A, Args) ->
     find(fun(E) -> E =:= A end, Args);
 has_arg({arg, N}, Args) when is_integer(N) ->
     %% The second clause in the predicate is for {N, MFA} args.
-    find(fun({arg,{_,N2}}) -> N =:= N2; ({_,{_,_,_}}) -> false end, Args).
+    find(fun({arg,{_,N2}}) -> N =:= N2; (_) -> false end, Args).
 
 
 %% @doc Return {ok,Elem} for the first element of the list to match Pred,
