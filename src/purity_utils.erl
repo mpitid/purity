@@ -31,7 +31,7 @@
 -export([internal_function/1]).
 -export([rev_deps/1, rev_mod_deps/1]).
 -export([collect_dependencies/1, is_concrete_fun/1, is_primop/1]).
--export([rev_append/2, dict_cons/3]).
+-export([dict_cons/3]).
 
 -export([remove_args/1]).
 -export([count/1]).
@@ -135,7 +135,7 @@ collect_dependencies(Val, All) when is_list(Val) ->
         true ->
             %% Collect functions that occur in the argument list as well.
             L2 = [Fun || {_Type, _Fun, Args} <- Val, {_, Fun} <- Args],
-            rev_append(L2, L1)
+            lists:reverse(L2, L1)
     end;
 collect_dependencies(_NonCtx, _) ->
     [].
@@ -179,15 +179,6 @@ is_special(exceptions) ->
     true;
 is_special(_) ->
     false.
-
-%% Should be more efficient than append, when order is not important.
-
--spec rev_append([term()], [term()]) -> [term()].
-
-rev_append([], L) ->
-    L;
-rev_append([H|T], L) ->
-    rev_append(T, [H|L]).
 
 
 %% Faster than dict:append, in case order is not important.
@@ -325,7 +316,7 @@ count(Name) ->
     Key = {count, Name},
     case get(Key) of
         undefined ->
-            put(Key, 1),
+            put(Key, 2),
             1;
         N when is_integer(N) ->
             put(Key, N + 1)
