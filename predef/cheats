@@ -11,7 +11,5 @@ erlang,list_to_integer,2		[{remote,{erlang,list_to_integer,1},[]}]
 erlang,localtime_to_universaltime,1	[{remote,{erlang,localtime_to_universaltime,2},[]}]
 erlang,max,2	true
 erlang,min,2	true
-## Some I/O funs, since tests don't operate on a complete PLT.
-io,getline,1	se
 ## Many functions depend on this but we can't analyse it fully atm.
 io_lib,format,2	ex
