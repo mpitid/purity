@@ -25,11 +25,14 @@
 %%% This module is loosely modeled after the `optparse' Python module,
 %%% but is significantly more limited.
 %%%
-%%% @todo: Handle multiple occurrences of the same option meaningfully.
 
 -module(cl_parser).
 
--export([parse_args/2]).
+-export([parse_args/2, parse_args/3]).
+
+-ifdef(TEST).
+-include("cl_parser_tests.hrl").
+-endif.
 
 -type desc()        :: [{atom(), [any()]}].
 -type options()     :: [atom() | {atom(), any()}].
@@ -50,13 +53,12 @@
 %% and plain arguments.
 %%
 %% Desc is a list of tuples, describing the command line arguments, e.g.
-%%
-%% `[{help,
-%%     ["-h", "--help", {type, bool}, {help, "Produce this help message"}],'
-%%
-%%  `{conf,
-%%     ["-c", "--conf", {type, string}, {help, "Path to configuration file"}]}]'
-%%
+%% ```
+%%  [{help,
+%%     ["-h", "--help", {type, bool}, {help, "Produce this help message"}],
+%%   {conf,
+%%     ["-c", "--conf", {type, string}, {help, "Path to configuration file"}]}]
+%% '''
 %% The help option is added by default. The default type is `string',
 %% which expects one argument, and can be omitted from the description.
 %% It's not necessary to specify both short and long options.
@@ -64,20 +66,42 @@
 %% Options is a list of atoms or tuples of atoms and values, depending
 %% on the type. In our example, if `-h' and `-c test.cnf' was specified it
 %% would be `[help,{conf,"test.cnf"}]'.
+%%
+%% @see parse_args/3
 
 -spec parse_args(desc(), string()) -> {options(), arguments()}.
 
 parse_args(Desc, Usage) ->
+    parse_args(Desc, Usage, []).
+
+
+%% @doc The `Extra' argument is a list of post-processing instructions
+%% to be applied in the parsed option list. Currently two operations are
+%% supported:
+%% <dl>
+%% <dt> `only_keep_last' </dt>
+%% <dd> Only keep the last occurrence for options specified multiple
+%%      times. </dd>
+%% <dt> `{override, [ {opt1, opt2} | ... ] }' </dt>
+%% <dd> Remove any occurrence of `opt2' when `opt1' is present in the
+%%      option list. </dd>
+%% </dl>
+%%
+%% @see parse_args/2
+
+-spec parse_args(desc(), string(), [any()]) -> {options(), arguments()}.
+
+parse_args(Desc, Usage, Extra) ->
     Specs = build_specs(Desc),
     Args = init:get_plain_arguments(),
     try parse(Args, Specs) of
-        {Opts, _Rest} = Ret ->
+        {Opts, Rest} ->
             case lists:member(help, Opts) of
                 true ->
                     pretty_print(Usage, Specs),
                     init:stop();
                 false ->
-                    Ret
+                    {lists:foldl(fun postprocess/2, Opts, Extra), Rest}
             end
     catch
         throw:{parser_error, Msg} ->
@@ -233,4 +257,38 @@ pretty_print({_, Desc}) ->
     Flag2 = string:join([Flag1 | ["VALUE" || {type, string} <- Desc]], "="),
     {help, Msg} = lists:keyfind(help, 1, Desc),
     io:format("  ~s~n\t\t~s~n", [Flag2, Msg]).
+
+
+postprocess({override, Rules}, Opts0) ->
+    Funs = compile_overrides(Rules),
+    lists:foldl(fun(F, OptsN) -> F(OptsN) end, Opts0, Funs);
+postprocess(only_keep_last, Opts) ->
+    lists:usort(fun opts_cmp/2, lists:reverse(Opts)).
+
+compile_overrides(Rules) ->
+    lists:map(
+        fun({O1, O2}) -> fun(Opts) -> override(O1, O2, Opts) end end, Rules).
+
+override(O1, O2, Opts) ->
+    case lists:any(fun(O) -> matching_opt(O1, O) end, Opts) of
+        true ->
+            [Opt || Opt <- Opts, not matching_opt(O2, Opt)];
+        false ->
+            Opts
+    end.
+
+%% @doc Match boolean as well as value currying options ({key, value}).
+matching_opt(Opt, Opt) ->
+    true;
+matching_opt(Opt, {Opt, _}) ->
+    true;
+matching_opt(_, _) ->
+    false.
+
+%% @doc Compare two options in such a way so that {key, value} options
+%% are considered equal no matter the value.
+opts_cmp({Opt, _}, {Opt, _}) ->
+    true;
+opts_cmp(A, B) ->
+    A =< B.
 

@@ -1,6 +1,4 @@
 
--ifdef(TEST).
-
 -include_lib("eunit/include/eunit.hrl").
 
 find_matching_args_test_() ->
@@ -15,4 +13,3 @@ find_matching_args_test_() ->
     ,?_assertMatch({all, _}, find_matching_args([{arg,3},{arg,1}], [{1,a},{3,b}]))
     ].
 
--endif.

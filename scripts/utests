@@ -16,7 +16,7 @@ main(Tests) ->
     end.
 
 test(Filename) ->
-    io:format("| Testing '~s'~n", [Filename]),
     Module = list_to_atom(filename:rootname(filename:basename(Filename))),
+    io:format("~s~n", [Module]),
     eunit:test({inparallel, Module}).
 

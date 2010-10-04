@@ -52,6 +52,14 @@ main() ->
             Files0 ++ expand_libs(Libs)
       end,
 
+    case {Files, option(no_check, Options)} of
+        {[], true} ->
+            io:format("You have to specify at least one file to analyse.~n"),
+            halt(1);
+        _ ->
+            ok
+    end,
+
     with_option(verbose, Options, fun(true) ->
                 io:format("Analyzing the following files:~n"),
                 lists:foreach(fun(F) -> io:format("\t~s~n", [F]) end, Files) end),
@@ -235,7 +243,8 @@ parse_args() ->
                 {type, bool},
                 {help, "Print version information and exit"}]}
     ],
-    cl_parser:parse_args(Spec, "usage: purity [options] file(s)").
+    Extra = [only_keep_last, {override, [{termination, purelevel}]}],
+    cl_parser:parse_args(Spec, "usage: purity [options] file(s)", Extra).
 
 
 option(Name, Options) ->

@@ -83,7 +83,7 @@ tests: $(BIN) build_tests
 
 units:
 	EFLAGS=-DTEST $(MAKE)
-	@./scripts/utests `echo src/*_tests.erl | sed 's/_tests//'`
+	@./scripts/utests `echo src/*_tests.hrl | sed 's/_tests//g'`
 
 
 dialyzer: $(EBIN) $(BIN)

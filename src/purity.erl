@@ -37,7 +37,9 @@
 
 -export_type([pure/0]).
 
--include("purity_tests.erl").
+-ifdef(TEST).
+-include("purity_tests.hrl").
+-endif.
 
 %% Besides built-in functions, a select few of Erlang expressions
 %% may influence the purity if functions.
@@ -930,7 +932,7 @@ without_self_deps(_, V) ->
 %% A recursive call within a HOF can be safely ignored if the
 %% arguments passed to it are some permutation of the arguments
 %% expected as higher order functions, e.g.
-%% > a(F, G, A) -> G(F(A),..., a(F, G, _). or a(G, F, _).
+%% > a(F, G, A) -> G(F(A)),..., a(F, G, _). or a(G, F, _).
 self_dep_same_arg(F, {_, F, Args}, Expecting) ->
     ESet = ordsets:from_list(Expecting),
     ASet = ordsets:from_list([N || {arg, {N, K}} <- Args,
@@ -1199,7 +1201,7 @@ match_args([], _Deps, Matching, Remaining) ->
 mutual_analysis(#pst{cycles = undefined, table = T} = St) ->
     %% Cache mapping of mutually recursive functions to their cycle.
     %% This is only a minor optimisation, the biggest gain is from
-    %% waiting up to this point in the propagation to built the map.
+    %% waiting up to this point in the propagation to build the map.
     mutual_analysis(St#pst{cycles = build_cycle_map(T)});
 mutual_analysis(#pst{cycles = C, table = T} = St) ->
     Funs = [F || {F, _} <- converge(fun mutual_selection/1,
