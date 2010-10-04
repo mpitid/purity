@@ -150,7 +150,7 @@ is_mfa(_) ->
 
 -spec is_expr(term()) -> boolean().
 
-is_expr({erl, Expr}) when is_atom(Expr) ->
+is_expr({erl, _Expr}) ->
     true;
 is_expr(_) ->
     false.

@@ -29,7 +29,7 @@
 -export([module/3, modules/3]).
 -export([pmodules/3, panalyse/2]).
 -export([is_pure/2]).
--export([propagate/2, find_missing/1]).
+-export([propagate/2, propagate_termination/2, find_missing/1]).
 -export([analyse_changed/3]).
 
 -import(purity_utils, [fmt_mfa/1, str/2]).
@@ -42,8 +42,9 @@
 %% Besides built-in functions, a select few of Erlang expressions
 %% may influence the purity if functions.
 -define(PREDEF, [
-        {{erl,'receive'},  [side_effects]},
-        {{erl,'catch'},    [non_determinism]}]).
+        {{erl,{'receive',finite}},    [side_effects]},
+        {{erl,{'receive',infinite}},  [side_effects]},
+        {{erl,'catch'},               [non_determinism]}]).
 %% Note that most exceptions are expressed in terms of the following
 %% BIFs and primops which are hard-coded elsewhere:
 %% {erlang,error,1}, {erlang,throw,1}, {erlang,exit,1}
@@ -59,7 +60,7 @@
                  | {local, mfa() | atom(), [ctx_arg()]}
                  | {primop, {atom(), arity()}, [ctx_arg()]}
                  | arg_dep()
-                 | {erl, 'receive' | 'catch'}
+                 | {erl, {'receive', finite | infinite} | 'catch'}
                  | special().
 
 
@@ -361,7 +362,8 @@ traverse(Tree, #state{ctx = Ctx} = St0) ->
             Clauses = cerl:receive_clauses(Tree),
             Timeout = cerl:receive_timeout(Tree),
             Action = cerl:receive_action(Tree),
-            St1 = St0#state{ctx = ctx_add({erl, 'receive'}, Ctx)},
+            Type = receive_type(Timeout),
+            St1 = St0#state{ctx = ctx_add({erl, {'receive', Type}}, Ctx)},
             traverse_list(Clauses ++ [Timeout, Action], St1);
         'apply' ->
             Op = cerl:apply_op(Tree),
@@ -444,6 +446,21 @@ resolve_fun_binding(Var, #state{mfa = {M,_,_}} = St) ->
             end
     end.
 
+%% @doc A receive statement is considered finite only if it has a
+%% constant literal as a timeout value. Missing `after' clauses
+%% are translated to a timeout of `infinity' in Core Erlang.
+receive_type(Tree) ->
+    case cerl:is_literal(Tree) of
+        true ->
+            case cerl:concrete(Tree) of
+                infinity ->
+                    infinite;
+                _Val ->
+                    finite
+            end;
+        false -> % var, call or apply
+            infinite
+    end.
 
 %% @doc Flatten dependencies to nested functions.
 %%
@@ -810,6 +827,41 @@ state_new(Options, Names, Table) ->
            table = Table}.
 
 
+%% @doc Crude and very conservative termination analysis.
+%%
+%% A function is considered non-terminating if it calls itself,
+%% has a receive statement with a potentially infinite timeout, or
+%% depends on another function which is non-terminating.
+
+-spec propagate_termination(dict(), purity_utils:options()) -> dict().
+
+propagate_termination(Tab0, _Opts) ->
+    %% All BIFs are considered terminating.
+    Tab1 = update(Tab0, collect_bif_deps(Tab0), true),
+    KeyVals = [
+        {side_effects, true}, {non_determinism, true}, {exceptions, true},
+        {{erl, {'receive', infinite}}, {false, "infinite wait"}}],
+    Tab2 = merge(Tab1, dict:from_list(KeyVals)),
+    Funs = recursive_functions(Tab2),
+    Tab3 = update(Tab2, Funs, {false, "recursion"}),
+    converge_pst(
+        fun propagate_termination_loop/1,
+        #pst{funs = Funs, table = Tab3,
+             revs = purity_utils:rev_deps(Tab3)}).
+
+propagate_termination_loop(#pst{table = Tab0} = St0) ->
+    {Pure, Impure} = collect_concrete(Tab0),
+    St1 = propagate_impure(St0#pst{funs = Impure}),
+    St2 = propagate_pure(St1#pst{funs = Pure}),
+    St3 = call_site_analysis(St2),
+    St4 = higher_analysis(St3),
+    St4.
+
+recursive_functions(Tab) ->
+    [F || C <- digraph_utils:cyclic_strong_components(dependency_graph(Tab)),
+          F <- C].
+
+
 %% @spec propagate(dict(), purity_utils:options()) -> dict()
 %%
 %% @doc Return a version of the lookup table with dependencies
@@ -839,7 +891,8 @@ propagate(Tab0, Opts) ->
     KeyVals = lists:zip([side_effects, non_determinism, exceptions], Vals),
     Tab1 = without_self_deps(
         merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals))),
-    converge_pst(#pst{revs = purity_utils:rev_deps(Tab1), table = Tab1}).
+    converge_pst(fun propagate_loop/1,
+                 #pst{revs = purity_utils:rev_deps(Tab1), table = Tab1}).
 
 %% Higher order analysis should replace call_site analysis completely
 %% at some point, but currently it is still useful for functions which
@@ -896,12 +949,12 @@ arg_dep({arg, _}) ->
 arg_dep(_) ->
     false.
 
-converge_pst(#pst{table = Tab} = St0) ->
-    case propagate_loop(St0) of
+converge_pst(Fun, #pst{table = Tab} = St0) ->
+    case Fun(St0) of
         #pst{table = Tab} ->
             Tab;
         St1 ->
-            converge_pst(St1)
+            converge_pst(Fun, St1)
     end.
 
 %% @doc Return two lists of functions with concrete values, one for 
@@ -975,6 +1028,8 @@ fmt(Deps) ->
     Ds = [fmt_dep(D) || D <- lists:usort(Deps)],
     "call to impure " ++ string:join(Ds, ", ").
 
+fmt_dep({erl, {'receive',_}}) ->
+    "'receive' expression";
 fmt_dep({erl, A}) ->
     str("~p expression", [A]); % Preserve quotes.
 fmt_dep(side_effects) ->

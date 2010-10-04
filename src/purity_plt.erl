@@ -287,6 +287,8 @@ cache_key(Options) ->
 
 relevant({purelevel, _}) ->
     true;
+relevant(termination) ->
+    true;
 relevant(_) ->
     false.
 
