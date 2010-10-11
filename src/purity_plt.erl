@@ -32,7 +32,7 @@
 
 -import(purity_utils, [str/2, filename_to_module/1]).
 
--export_type([plt/0]).
+-export_type([plt/0, changed_files/0]).
 
 -define(VERSION, "0.3").
 
@@ -46,7 +46,7 @@
               table     = dict:new() :: dict(),
               cache     = []         :: [{term(), dict()}]}).
 
--type plt() :: #plt{}.
+-opaque plt() :: #plt{}.
 
 
 -spec new() -> plt().

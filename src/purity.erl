@@ -225,7 +225,7 @@ collect_deps(Tab, Filter) ->
 
 
 %% @doc Re-analyse changed files and affected modules, update PLT.
--spec analyse_changed(term(), purity_utils:options(), purity_plt:plt()) -> purity_plt:plt().
+-spec analyse_changed(purity_plt:changed_files(), purity_utils:options(), purity_plt:plt()) -> purity_plt:plt().
 
 analyse_changed(Changed, Options, Plt) ->
     Mods = purity_plt:get_affected(Plt, Changed),
