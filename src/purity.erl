@@ -838,8 +838,9 @@ state_new(Options, Names, Table) ->
 -spec propagate_termination(dict(), purity_utils:options()) -> dict().
 
 propagate_termination(Tab0, _Opts) ->
-    %% All BIFs are considered terminating.
-    Tab1 = update(Tab0, collect_bif_deps(Tab0), true),
+    %% All BIFs are considered terminating, but we have to keep track
+    %% of higher order BIFs too.
+    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF)),
     KeyVals = [
         {side_effects, true}, {non_determinism, true}, {exceptions, true},
         {{erl, {'receive', infinite}}, {false, "infinite wait"}}],
