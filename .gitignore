@@ -20,3 +20,6 @@ README.html
 # etags
 TAGS
 
+# Common suffix of result/stats files:
+*.out
+*.sts

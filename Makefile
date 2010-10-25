@@ -47,7 +47,7 @@ $(EBIN)/%.beam: $(ESRC)/%.erl $(ESRC)/%.hrl
 	@echo " h  ERLC $<"
 	@$(ERLC) $(EFLAGS) -o $(EBIN) $<
 
-$(EBIN)/%.beam: $(ESRC)/%.erl $(ESRC)/%_tests.erl
+$(EBIN)/%.beam: $(ESRC)/%.erl $(ESRC)/%_tests.hrl
 	@echo " t  ERLC $<"
 	@$(ERLC) $(EFLAGS) -o $(EBIN) $<
 
