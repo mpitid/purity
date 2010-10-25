@@ -13,3 +13,12 @@ find_matching_args_test_() ->
     ,?_assertMatch({all, _}, find_matching_args([{arg,3},{arg,1}], [{1,a},{3,b}]))
     ].
 
+
+pick_only_concrete_test_() ->
+    [?_assertMatch(pure, pick_only_concrete([{ok,true},{ok,[]},{ok,true}]))
+    ,?_assertMatch(impure, pick_only_concrete([{ok,true},{ok,[]},{ok,false}]))
+    ,?_assertMatch(impure, pick_only_concrete([{ok,[]},{ok,{false,"impure"}}]))
+    ,?_assertMatch(other, pick_only_concrete([{ok,true},error,{ok,true}]))
+    ,?_assertMatch(other, pick_only_concrete([{ok,[not_empty]}]))
+].
+

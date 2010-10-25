@@ -178,6 +178,8 @@ higher_analysis(_Fun, [{_Type, {_,_,_} = Dep, [{N, {_,_,_} = Arg}]}], Table, G) 
             unresolved;
         {ok, {false, _Rsn}} ->
             {resolved, impure};
+        {ok, false} ->
+            {resolved, impure};
         {ok, Ctx} when is_list(Ctx) ->
             higher_callsite(Dep, N, Arg, Table, G);
         error ->
@@ -221,6 +223,8 @@ try_to_resolve({_,_,_} = Fun, Table) ->
         {ok, true} ->
             {resolved, pure};
         {ok, {false, _Rsn}} ->
+            {resolved, impure};
+        {ok, false} ->
             {resolved, impure};
         _AnythingElse ->
             unresolved

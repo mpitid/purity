@@ -70,7 +70,10 @@
 -type map_val() :: mfa() | pos_integer().
 -type map()     :: [{map_key(), map_val()}].
 
--type pure()    :: true | {false, string()} | [context()] | undefined.
+-type pure()    :: true
+                 | false | {false, string() | binary()}
+                 | [context()]
+                 | undefined.
 
 
 %% @spec is_pure(mfa(), dict()) -> boolean()
@@ -169,6 +172,7 @@ load_plt_silent(Opts) ->
 -record(pst, {funs = []         :: [mfa()],
               prev = sets:new() :: set(),
               revs              :: dict(),
+              rsns = false      :: boolean(),
               cycles            :: dict(),
               table             :: dict()}).
 
@@ -862,19 +866,20 @@ preserve_matching(_K, _, _) -> false.
 
 -spec propagate_termination(dict(), purity_utils:options()) -> dict().
 
-propagate_termination(Tab0, _Opts) ->
+propagate_termination(Tab0, Opts) ->
     %% All BIFs are considered terminating, but we have to keep track
     %% of higher order BIFs too.
     Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF)),
     KeyVals = [
         {side_effects, true}, {non_determinism, true}, {exceptions, true},
-        {{erl, {'receive', infinite}}, {false, "infinite wait"}}],
+        {{erl, {'receive', infinite}}, false}],
     Tab2 = merge(Tab1, dict:from_list(KeyVals)),
     Funs = recursive_functions(Tab2),
-    Tab3 = update(Tab2, Funs, {false, "recursion"}),
+    Tab3 = update(Tab2, Funs, {false, <<"recursion">>}),
     converge_pst(
         fun propagate_termination_loop/1,
         #pst{funs = Funs, table = Tab3,
+             rsns = option(with_reasons, Opts),
              revs = purity_utils:rev_deps(Tab3)}).
 
 propagate_termination_loop(#pst{table = Tab0} = St0) ->
@@ -905,9 +910,9 @@ recursive_functions(Tab) ->
 -spec propagate_purity(dict(), purity_utils:options()) -> dict().
 
 propagate_purity(Tab0, Opts) ->
-    Fse = {false, fmt_dep(side_effects)},
-    Fnd = {false, fmt_dep(non_determinism)},
-    Fex = {false, fmt_dep(exceptions)},
+    Fse = {false, bin(fmt_dep(side_effects))},
+    Fnd = {false, bin(fmt_dep(non_determinism))},
+    Fex = {false, bin(fmt_dep(exceptions))},
     Vals =
       case option(purelevel, Opts, 1) of
           1 -> [Fse, true, true];
@@ -918,7 +923,8 @@ propagate_purity(Tab0, Opts) ->
     Tab1 = without_self_deps(
         merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals))),
     converge_pst(fun propagate_loop/1,
-                 #pst{revs = purity_utils:rev_deps(Tab1), table = Tab1}).
+                 #pst{revs = purity_utils:rev_deps(Tab1),
+                      table = Tab1, rsns = option(with_reasons, Opts)}).
 
 %% Higher order analysis should replace call_site analysis completely
 %% at some point, but currently it is still useful for functions which
@@ -994,6 +1000,8 @@ collect_concrete(F, [], {Pure, Impure}) ->
     {[F|Pure], Impure};
 collect_concrete(F, {false, _}, {Pure, Impure}) ->
     {Pure, [F|Impure]};
+collect_concrete(F, false, {Pure, Impure}) ->
+    {Pure, [F|Impure]};
 collect_concrete(_, _, Acc) ->
     Acc.
 
@@ -1025,7 +1033,7 @@ propagate_impure(#pst{funs = Funs0, table = Tab, prev = Set0} = St) ->
     Funs1 = lists:usort([D || {_F, Ds} <- Deps, D <- Ds,
                               not sets:is_element(D, Set0)]),
     propagate_impure(St#pst{funs = Funs1, prev = Set1,
-                            table = update(Tab, with_reasons(Deps))}).
+                            table = update_false(Tab, Funs1, Deps, St#pst.rsns)}).
 
 add_elements(Elements, Set) ->
     lists:foldl(fun sets:add_element/2, Set, Elements).
@@ -1036,6 +1044,14 @@ fetch_deps(Key, DepMap) ->
             Deps;
         error ->
             []
+    end.
+
+update_false(Tab, Funs, Deps, Reasons) ->
+    case Reasons of
+        false ->
+            update(Tab, Funs, false);
+        true ->
+            update(Tab, with_reasons(Deps))
     end.
 
 %% @doc Convert a list of impure functions and their reverse dependencies
@@ -1052,7 +1068,8 @@ map_reverse({F, Deps}, D0) ->
 fmt(Deps) ->
     %% Keep a list of sorted, unique references.
     Ds = [fmt_dep(D) || D <- lists:usort(Deps)],
-    "call to impure " ++ string:join(Ds, ", ").
+    Tl = list_to_binary(string:join(Ds, ", ")),
+    <<"call to impure ", Tl/binary>>.
 
 fmt_dep({erl, {'receive',_}}) ->
     "'receive' expression";
@@ -1101,7 +1118,7 @@ higher_analysis(Fun, Val, Table, Graph) ->
             true;
         {resolved, impure} ->
             %% TODO: Keep track of the offending function!
-            {false, "impure call to higher order function"};
+            {false, <<"impure call to higher order function">>};
         unresolved ->
             Val
     end.
@@ -1163,7 +1180,7 @@ analyse_call({_Type, CallMFA, Args} = Val, Table) ->
                         {all, pure} ->
                             true;
                         {_Any, impure} ->
-                            {false, "impure call to " ++ fmt_mfa(CallMFA)};
+                            {false, bin("impure call to ~s", [fmt_mfa(CallMFA)])};
                         _AnythingElse ->
                             failed
                     end
@@ -1175,21 +1192,27 @@ analyse_call({_Type, CallMFA, Args} = Val, Table) ->
             failed
     end.
 
+pick_only_concrete(Vals) ->
+    lists:foldl(fun reduce/2, pure, Vals).
 
-pick_only_concrete(Values) ->
-    reduce(Values, pure).
+reduce({ok, Val}, Prev) ->
+    case impure_val(Val) of
+        true -> impure;
+        false ->
+            case pure_val(Val) andalso Prev =:= pure of
+                true -> pure;
+                false -> other
+            end
+    end;
+reduce(error, _) -> other.
 
-reduce([{ok, true}|T], pure) ->
-    reduce(T, pure);
-reduce([{ok, []}|T], pure) ->
-    reduce(T, pure);
-reduce([{ok, {false, _}}|_], _) ->
-    impure;
-reduce([_|T], _) ->
-    reduce(T, other);
-reduce([], Result) ->
-    Result.
+pure_val(true) -> true;
+pure_val([]) -> true;
+pure_val(_) -> false.
 
+impure_val(false) -> true;
+impure_val({false,_}) -> true;
+impure_val(_) -> false.
 
 find_matching_args(ArgDeps, DepArgs) ->
     case match_args(ArgDeps, DepArgs, [], []) of
@@ -1332,4 +1355,11 @@ unzip1(Items) ->
 %% @doc Extract the Nth elements from a list of tuples.
 unzipN(N, Items) ->
     [element(N, Tuple) || Tuple <- Items].
+
+
+bin(S) when is_list(S) ->
+    list_to_binary(S).
+
+bin(Fmt, Args) ->
+    list_to_binary(io_lib:format(Fmt, Args)).
 

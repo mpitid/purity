@@ -278,7 +278,7 @@ postprocess(Table) ->
     dict:map(fun(_K, {false,_}) -> false; (_K, V) -> V end, Table).
 
 preprocess(Table) ->
-    dict:map(fun(_K, false) -> {false, "Cache"}; (_K, V) -> V end, Table).
+    dict:map(fun(_K, false) -> {false, <<"Cache">>}; (_K, V) -> V end, Table).
 
 
 %% @doc Produce a key from any relevant options.
