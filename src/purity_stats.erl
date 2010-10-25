@@ -92,6 +92,8 @@ incr(true, #stats{p = Pure} = S) ->
     S#stats{p = Pure + 1};
 incr({false, _}, #stats{i = Impure} = S) ->
     S#stats{i = Impure + 1};
+incr(false, #stats{i = Impure} = S) ->
+    S#stats{i = Impure + 1};
 incr(undefined, #stats{u = U} = S) ->
     S#stats{u = U + 1};
 incr(Ctx, #stats{u = U, l = L} = S) when is_list(Ctx) ->

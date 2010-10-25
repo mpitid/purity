@@ -136,16 +136,10 @@ do_stats(Filename, Modules, Table) ->
 do_analysis(Files, Options, Initial) ->
     Table = timeit("Traversing AST", fun() ->
                 purity:pmodules(Files, Options, Initial) end),
-    PropF =
-      case option(termination, Options) of
-        true ->
-            fun purity:propagate_termination/2;
-        false ->
-            fun purity:propagate/2
-      end,
     Final = timeit("Propagating values", fun() ->
-                PropF(Table, Options) end),
+                purity:propagate(Table, Options) end),
     {Table, Final}.
+
 
 with_option(Opt, Options, Action) ->
     case option(Opt, Options) of
@@ -194,6 +188,10 @@ parse_args() ->
                 {type, {intchoice, [1,2,3]}},
                 {default, 1},
                 {help, "Select one of three progressively stricter purity levels [default: 1]"}]},
+        {both, [
+            "--both",
+            {type, bool},
+            {help, "Perform both purity and termination analysis"}]},
         {termination, [
                 "-t", "--termination",
                 {type, bool},
@@ -282,6 +280,8 @@ print_missing(Print, Table) ->
 
 fmt(true) ->
     "true";
+fmt(false) ->
+    "false";
 fmt({false, Reason}) ->
     str("{false,~p}", [Reason]);
 fmt(undefined) ->

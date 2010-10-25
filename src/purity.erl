@@ -29,7 +29,7 @@
 -export([module/3, modules/3]).
 -export([pmodules/3, panalyse/2]).
 -export([is_pure/2]).
--export([propagate/2, propagate_termination/2, find_missing/1]).
+-export([propagate/2, propagate_termination/2, propagate_purity/2, find_missing/1]).
 -export([analyse_changed/3]).
 
 -import(purity_utils, [fmt_mfa/1, str/2]).
@@ -829,6 +829,31 @@ state_new(Options, Names, Table) ->
            table = Table}.
 
 
+%% @doc Select the appropriate propagation function or both, depending
+%% on the current set of options.
+%%
+%% @see propagate_purity/2
+%% @see propagate_termination/2
+
+-spec propagate(dict(), purity_utils:options()) -> dict().
+
+propagate(Tab, Opts) ->
+    case option(both, Opts) of
+        true ->
+            T1 = propagate_purity(Tab, Opts),
+            T2 = propagate_termination(Tab, Opts),
+            dict:merge(fun preserve_matching/3, T1, T2);
+        false ->
+            case option(termination, Opts) of
+                true -> propagate_termination(Tab, Opts);
+                false -> propagate_purity(Tab, Opts)
+            end
+    end.
+
+preserve_matching(_K, V, V) -> V;
+preserve_matching(_K, _, _) -> false.
+
+
 %% @doc Crude and very conservative termination analysis.
 %%
 %% A function is considered non-terminating if it calls itself,
@@ -865,7 +890,7 @@ recursive_functions(Tab) ->
           F <- C].
 
 
-%% @spec propagate(dict(), purity_utils:options()) -> dict()
+%% @spec propagate_purity(dict(), purity_utils:options()) -> dict()
 %%
 %% @doc Return a version of the lookup table with dependencies
 %% converted to concrete results.
@@ -877,20 +902,18 @@ recursive_functions(Tab) ->
 %% @see module/3
 %% @see modules/3
 
--spec propagate(dict(), purity_utils:options()) -> dict().
+-spec propagate_purity(dict(), purity_utils:options()) -> dict().
 
-propagate(Tab0, Opts) ->
+propagate_purity(Tab0, Opts) ->
     Fse = {false, fmt_dep(side_effects)},
     Fnd = {false, fmt_dep(non_determinism)},
     Fex = {false, fmt_dep(exceptions)},
-    Vals = case option(purelevel, Opts, 1) of
-        1 ->
-            [Fse, true, true];
-        2 ->
-            [Fse, Fnd, true];
-        3 ->
-            [Fse, Fnd, Fex]
-    end,
+    Vals =
+      case option(purelevel, Opts, 1) of
+          1 -> [Fse, true, true];
+          2 -> [Fse, Fnd, true];
+          3 -> [Fse, Fnd, Fex]
+      end,
     KeyVals = lists:zip([side_effects, non_determinism, exceptions], Vals),
     Tab1 = without_self_deps(
         merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals))),
@@ -1289,6 +1312,7 @@ update(Table, KeyVals) ->
 update(Table, Funs, Value) ->
     update(Table, [{F, Value} || F <- Funs]).
 
+option(Name, Options) -> option(Name, Options, false).
 option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
 
