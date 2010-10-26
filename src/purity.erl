@@ -70,6 +70,8 @@
 -type map_val() :: mfa() | pos_integer().
 -type map()     :: [{map_key(), map_val()}].
 
+-type sub() :: {dict(), dict()}.
+
 -type pure()    :: true
                  | false | {false, string() | binary()}
                  | [context()]
@@ -141,6 +143,7 @@ load_plt_silent(Opts) ->
 %% vars     - Map of higher order variables to MFAs
 %% args     - Map names of current function's arguments to their position
 %%            in the argument list
+%% subs     - Keep track of variables which are subsets of arguments
 %% aliases  - Keep track of aliases to variables for looking up vars/args
 %%            more effectively
 %% free     - An ordered set of free variables for the current function
@@ -157,6 +160,7 @@ load_plt_silent(Opts) ->
                 ctx     = ctx_new()  :: [context()],
                 vars    = map_new()  :: map(),
                 args    = map_new()  :: map(),
+                subs    = sub_new()  :: sub(),
                 aliases = dict:new() :: dict(),
                 free    = []         :: [cerl:var_name()],
                 nested  = []         :: [mfa()],
@@ -271,6 +275,7 @@ module(Core, Options, Tab0) ->
             analyse(Fun, St#state{mfa = {Module, F, A},
                                   nested = [],
                                   vars = map_new(),
+                                  subs = sub_new(),
                                   aliases = core_aliases:scan(Fun)}) end,
     St1 = lists:foldl(Fun, St0#state{names = Names}, Defs),
     St1#state.table.
@@ -353,9 +358,7 @@ traverse(Tree, #state{ctx = Ctx} = St0) ->
             Body = cerl:seq_body(Tree),
             traverse_list([Arg, Body], St0);
         'case' ->
-            Arg = cerl:case_arg(Tree),
-            Clauses = cerl:case_clauses(Tree),
-            traverse_list([Arg|Clauses], St0);
+            handle_case(Tree, St0);
         clause ->
             Patterns = cerl:clause_pats(Tree),
             Guard = cerl:clause_guard(Tree),
@@ -375,10 +378,10 @@ traverse(Tree, #state{ctx = Ctx} = St0) ->
             Op = cerl:apply_op(Tree),
             OpName = cerl:var_name(Op),
             Fun = resolve_fun_binding(OpName, St0),
-            Args = harvest_args(cerl:apply_args(Tree), St0),
+            Args = handle_args(Fun, cerl:apply_args(Tree), St0),
             St0#state{ctx = ctx_add({local, Fun, Args}, Ctx)};
         'call' ->
-            Args = harvest_args(cerl:call_args(Tree), St0),
+            Args = handle_args(call_mfa(Tree), cerl:call_args(Tree), St0),
             St0#state{ctx = ctx_add({remote, call_mfa(Tree), Args}, Ctx)};
         'fun' ->
             %% This mostly comes from nested funs as return values, etc.
@@ -718,15 +721,141 @@ handle_primop(Tree, #state{ctx = Ctx} = St0) ->
     Arity = cerl:primop_arity(Tree),
     St0#state{ctx = ctx_add({primop, {Name, Arity}, []}, Ctx)}.
 
+%% @doc Detect simple cases of variables which represent a strict subset of
+%% one of the arguments. This is useful for detecting recursive functions
+%% which consume one of their arguments, and are therefore guaranteed
+%% to terminate (or crash). Currently this works for some cases of lists
+%% and binaries.
+handle_case(Tree, St0) ->
+    true = cerl:is_c_case(Tree),
+    Arg = cerl:case_arg(Tree),
+    Cls = cerl:case_clauses(Tree),
+    %% Since pattern variable names may repeat themselves, use a
+    %% distinct subset map for each clause.
+    #state{subs = Sm0, args = Args} = St1 = traverse(Arg, St0),
+    St2 = lists:foldl(
+        fun(Cl, St) ->
+                traverse(Cl,
+                    St#state{subs = submerge(Args, Sm0, submap(Arg, Cl))}) end,
+        St1, Cls),
+    %% Restore the original map before return.
+    %% Assert that the map of St0 is equal to that of St1.
+    #state{subs = Sm0} = St0,
+    St2#state{subs = Sm0}.
+
+%% @doc Keep track of two distinct mappings:
+%% - From each variable to the one it is a subset of
+%% - From each variable to the position of the argument it is a subset of.
+%% While only the second mapping is useful, the first is necessary
+%% in order to recreate it at each new case clause.
+submerge(Args, {Map0, Sub0}, Map1) ->
+    Map2 = merge(Map0, Map1),
+    {Map2, merge(Sub0, to_argument_map(Args, Map2))}.
+
+%% @doc Generate the mapping of variables to the position of
+%% the argument they are a subset of.
+to_argument_map(Args, Map) ->
+    G = dict:fold(fun make_edge/3, digraph:new(), Map),
+    M = lists:foldl(
+        fun({A,N}, D) -> update(D, reaching(G, A), N) end,
+        dict:new(), Args),
+    digraph:delete(G),
+    M.
+
+make_edge(V1, V2, G) ->
+    digraph:add_edge(G, digraph:add_vertex(G, V1),
+                        digraph:add_vertex(G, V2)), G.
+
+reaching(G, A) ->
+    digraph_utils:reaching_neighbours([A], G).
+
+submap(Tree, Clause) ->
+    Items =
+      case cerl:type(Tree) of
+          var -> %% single variable match
+              find_matching_patterns([Tree], Clause);
+          values -> %% tuple match, e.g. function args
+              find_matching_patterns(cerl:values_es(Tree), Clause);
+          _o ->
+              []
+      end,
+    mapof(Items).
+
+find_matching_patterns(Vals, Clause) ->
+    Pats = cerl:clause_pats(Clause),
+    case length(Vals) =:= length(Pats) of
+        true ->
+            [subpattern(V, P)
+                || {V, P} <- lists:zip(Vals, [unalias(P) || P <- Pats])];
+        false ->
+            []
+    end.
+
+subpattern(Val, Pat) ->
+    case {cerl:type(Val), cerl:type(Pat)} of
+        {var, cons} -> %% List pattern match
+            mapto(Val, Pat, fun cons_vars/1);
+        {var, binary} -> %% Binary pattern match
+            mapto(Val, Pat, fun bin_vars/1);
+        _o ->
+            []
+    end.
+
+mapto(Var, Pat, Extract) ->
+    Vn = cerl:var_name(Var),
+    [{cerl:var_name(V), Vn} || V <- Extract(Pat), cerl:is_c_var(V)].
+
+cons_vars(Tree) ->
+    case cerl:type(Tree) of
+        cons ->
+            [cerl:cons_hd(Tree) | cons_vars(cerl:cons_tl(Tree))];
+        _ ->
+            [Tree]
+    end.
+
+bin_vars(Tree) ->
+    [cerl:bitstr_val(B) || B <- cerl:binary_segments(Tree)].
+
+%% @doc Extract the pattern from a variable alias.
+unalias(Tree) ->
+    case cerl:type(Tree) of
+        alias ->
+            cerl:alias_pat(Tree);
+        _ ->
+            Tree
+    end.
+
+mapof(Items) -> dict:from_list(lists:flatten(Items)).
+
+
+%% @doc Add subset information on recursive calls.
+%% @see handle_case/2
+handle_args(MFA, Args, #state{mfa = MFA} = St) -> %% Recursion
+    ordsets:union(harvest_args(Args, St), get_subsets(Args, St));
+handle_args(_Call, Args, #state{} = St) ->
+    harvest_args(Args, St).
+
+get_subsets(Args, #state{}=St) ->
+    ordsets:from_list(oklist([get_subset(V, St) || V <- enum_args(Args)])).
+
+get_subset({N, V}, #state{subs = {_, S}}) ->
+    case dict:find(V, S) of
+        {ok, N} -> {ok, {sub,N}};
+        {ok, _} -> error;
+        error -> error end.
+
+oklist(L) ->
+    [E || {ok, E} <- L].
+
+enum_args(Args) ->
+    [{N, cerl:var_name(A)} || {N, A} <- enumerate(Args), cerl:is_c_var(A)].
 
 %% @doc Find any arguments in the list which represents a function.
 %% Return a list of {Position, MFA} tuples.
 %-spec harvest_args(cerl:cerl(), state()) -> [ctx_arg()]. %% dialyzer chokes on cerl().
 harvest_args(Args, #state{} = St) ->
-    Vars = [{N, cerl:var_name(V)} || {N, V} <- enumerate(Args),
-                                     cerl:is_c_var(V)],
     lists:usort(lists:foldl(
-            fun(NV, Acc) -> find_arg(NV, St, Acc) end, [], Vars)).
+            fun(NV, Acc) -> find_arg(NV, St, Acc) end, [], enum_args(Args))).
 
 find_arg({N, {F, A} = Var},  #state{mfa = {M,_,_}, vars = Vs}, Acc) ->
     %% No need to lookup Var here, since it represents `letrec' generated
@@ -832,6 +961,7 @@ state_new(Options, Names, Table) ->
            names = Names,
            table = Table}.
 
+sub_new() -> {dict:new(), dict:new()}.
 
 %% @doc Select the appropriate propagation function or both, depending
 %% on the current set of options.
@@ -862,7 +992,9 @@ preserve_matching(_K, _, _) -> false.
 %%
 %% A function is considered non-terminating if it calls itself,
 %% has a receive statement with a potentially infinite timeout, or
-%% depends on another function which is non-terminating.
+%% depends on another function which is non-terminating. Certain
+%% cases of functions which consume one of their arguments are
+%% also detected and considered terminating.
 
 -spec propagate_termination(dict(), purity_utils:options()) -> dict().
 
@@ -873,7 +1005,7 @@ propagate_termination(Tab0, Opts) ->
     KeyVals = [
         {side_effects, true}, {non_determinism, true}, {exceptions, true},
         {{erl, {'receive', infinite}}, false}],
-    Tab2 = merge(Tab1, dict:from_list(KeyVals)),
+    Tab2 = without_subset_recursion(merge(Tab1, dict:from_list(KeyVals))),
     Funs = recursive_functions(Tab2),
     Tab3 = update(Tab2, Funs, {false, <<"recursion">>}),
     converge_pst(
@@ -894,6 +1026,47 @@ recursive_functions(Tab) ->
     [F || C <- digraph_utils:cyclic_strong_components(dependency_graph(Tab)),
           F <- C].
 
+%% @doc Remove any self-recursive dependencies which consume one of
+%% their arguments.
+without_subset_recursion(Tab) ->
+    dict:map(fun without_subset_recursion/2, Tab).
+
+without_subset_recursion(F, C) when is_list(C) ->
+    RecArgs = [A || {_, D, A} <- C, D =:= F],
+    C1 =
+      case all_subsets(RecArgs) andalso no_high_callsite(RecArgs) of
+          true -> [D || D <- C, not self_dep(F, D)];
+          false -> C end,
+    lists:usort(clear_sub(C1));
+without_subset_recursion(_, C) ->
+    C.
+
+clear_sub(C) ->
+    [clear_sub1(D) || D <- C].
+
+clear_sub1({T,F,Args}) when is_list(Args) ->
+    {T, F, [A || A <- Args, not sub(A)]};
+clear_sub1(D) ->
+    D.
+
+sub({sub,_}) -> true;
+sub(_) -> false.
+
+%% @doc Check whether all calls have at least one common subset as
+%% argument.
+all_subsets(Args) ->
+    case [ordsets:from_list([N || {sub, N} <- A]) || A <- Args] of
+        [] -> false;
+        [H|T] -> [] =/= lists:foldl(fun ordsets:intersection/2, H, T)
+    end.
+
+%% @doc Check whether there is no concrete call for recursive higher
+%% order functions.
+no_high_callsite(Args) ->
+    not lists:any(fun concrete_arg/1, lists:flatten(Args)).
+
+concrete_arg({_N, {_M,_F,_A}}) -> true;
+concrete_arg(_) -> false.
 
 %% @spec propagate_purity(dict(), purity_utils:options()) -> dict()
 %%
