@@ -3,8 +3,8 @@
 
 -compile(export_all).
 
-%%-f1/2 {false,"impure call to primop match_fail:1"} --level 2
-%% f1/2 true
+%< [{purelevel,1}] f1/2 true
+%< [{purelevel,3}] f1/2 {false,"impure call to primop match_fail:1"}
 f1(X, Y) ->
     case {X,Y} of
         {1,2} -> ok;

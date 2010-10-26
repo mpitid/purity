@@ -13,3 +13,4 @@ erlang,max,2	true
 erlang,min,2	true
 ## Many functions depend on this but we can't analyse it fully atm.
 io_lib,format,2	ex
+#lists,duplicate,2 ex

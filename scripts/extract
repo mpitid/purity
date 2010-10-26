@@ -1,0 +1,107 @@
+#!/usr/bin/env python
+
+"""
+Extract expected test results from Erlang source files and write to
+separate files, grouped by option sets.
+
+The format of test results is:
+    %< global OPTIONS
+    %< OPTIONS? FUN RESULT
+
+where:
+    * OPTIONS is a an erlang list of option tuples.
+    * FUN identifies a functioni either as a {module,function,arity}
+    tuple or function/arity specification.
+    * RESULT is an erlang term representing the expected result.
+
+"""
+
+import os.path, re, sys
+from collections import defaultdict
+
+module = None
+
+def main(argv):
+    global module
+    if len(argv) != 3:
+        print>>sys.stderr, "usage: %s <test_file> <output_directory>" % argv[0]
+        return 1
+    filename, outdir = argv[1:]
+    module = os.path.basename(os.path.splitext(filename)[0])
+    with open(filename, 'rb') as fd:
+        opts, data = extract(fd)
+    for i, (k, v) in enumerate(data):
+        print write_tests(outfile(outdir, module, i), opts, k, v)
+    return 0
+
+def outfile(dir, mod, n):
+    return os.path.join(dir, "%s.%s" % (mod, n))
+
+def write_tests(filename, gopts, opts, data):
+    assert not os.path.exists(filename), "file exists %r" % filename
+    with open(filename, 'w') as fd:
+        fd.write("{%s,\n" % merge_opts(gopts, opts))
+        data = ["{%s,%s}" % (f, v) for (f,v) in data.iteritems()]
+        fd.write(" [" + "\n ,".join(data) + "]}.\n")
+    return filename
+
+def extract(lines):
+    opts = None
+    tests = defaultdict(dict)
+    for line in lines:
+        line = line.strip()
+        if is_test(line):
+            if is_global(line):
+                assert not opts, "multiple global statements"
+                opts = parse_global(line)
+            else:
+                opt, fun, result = parse_test(line)
+                fun = parse_fun(fun)
+                assert fun not in tests[opt], "duplicate test %r" % fun
+                tests[opt][fun] = result
+    return opts, merge_tests(tests)
+
+def merge_tests(tests):
+    """Fill incomplete tests with the corresponding default test."""
+    common = tests[None]
+    keys = set(k for v in tests.values() for k in v.keys())
+    for k, v in tests.iteritems():
+        for k in keys:
+            if k not in v and common: # Can't do anything if no common case exists.
+                v[k] = common[k]
+    if not common:
+        # Remove it, it was just created by the defaultdict.
+        del tests[None]
+    return tuple(tests.iteritems())
+
+def merge_opts(*opts):
+    """Merge a list of option lists into a single option list."""
+    # Filter out None/empty lists.
+    return "[%s]" % (','.join(opt[1:-1] for opt in opts if opt))
+
+def is_test(text):
+    return "%<" in text
+
+def is_global(text):
+    assert is_test(text)
+    return text.lstrip(" %<").startswith("global")
+
+def parse_global(text):
+    return text.replace("global", "").lstrip(" %<")
+
+def parse_test(text):
+    rgx = re.compile("(?:(\[[^]]*\])\s+)?([^ ]+)\s+(.+)\s*$")
+    return rgx.match(text.lstrip(' %<')).groups()
+
+def parse_fun(fun):
+    """Convert fun/arity specifications to {module,fun,arity}."""
+    rgx = re.compile("(\w+|'[a-zA-Z0-9_-]+')/(\d)")
+    m = rgx.match(fun)
+    if m is not None:
+        f, a = m.groups()
+        return "{%s,%s,%s}" % (module,f, a)
+    return fun
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

@@ -1,64 +1,27 @@
-#!/bin/bash
-# Automated tests for purity.
+#!/bin/zsh
 
 scripts=$(dirname $0)
 source $scripts/common
 
-#PURITY_OPTS=(--level 2) # or 3 for exceptions
-PURITY_OPTS=()
-
-make_usage "[ options ] [ file(s).erl ]"\
-           "Options:"\
-           "-f|--from-file FILE"\
-           "\tRead results from FILE instead of extracting them from the test files."\
-           ""\
-           "If no arguments are specified, the 'tests' directory is searched."
-
 main() {
-    tmpdir=$(make_tempfile -dt ptests.XXXXXX)
-
-
-    expected="$tmpdir/results-expected.txt"
-    actual="$tmpdir/results-actual.txt"
-
-    case $1 in
-        -f|--from-file)
-            [[ -n "$2" ]] && results="$2" || die "Option $1 expects one argument"
-            shift 2
-            ;;
-    esac
-
-    # Check whether the test results where specified explicitly,
-    # otherwise try to extract them from the test files.
-    if [[ -n "$results" ]]; then
-        $scripts/esort "$results" -o "$expected"
-    else
-        $scripts/gather_results $@ > $expected
-    fi
-
-    erl_exec purity_cli main -extra ${PURITY_OPTS[@]} $(strip_suffix $@) \
-    | egrep '^[[:alnum:]]+:[[:alpha:]]+' > $actual
-    # Note how the above regular expression filters-out MFAs in quotes
-    # (our nested fun names for instance).
-
-    if diff -q $expected $actual; then
-        echo "PASSED ALL $# TESTS"
-        rm -r $tmpdir || echo "Could not remove temporary directory $tmpdir"
-    else
-    	echo "==============="
-        echo " FAILING TESTS"
-    	echo "==============="
-        echo "You will have to remove $tmpdir manually."
-        echo "Consider running:"
-        echo "vimdiff '$expected' '$actual'"
-    fi
+    dir=$(make_tempfile -dt ptests.XXXXXXX)
+    P=0
+    F=0
+    for test in $@; do
+        for exp in $($scripts/extract ${test:r}.erl $dir); do
+            runtest $test $exp $dir && passed $exp || failed
+        done
+    done
+    rmdir $dir
+    report
 }
 
-# Try to be smart if no arguments are passed.
-[[ -z "$@" ]] && set tests/*.erl
-
-# Still no test files:
-[[ -z "$@" || '-h' == "$1" ]] && usage
+runtest() { erl_exec runtest main $@ }
+passed() { ((P++)); rm $1 }
+failed() { ((F++)) }
+report() {
+    if ((F>0)); then echo "$F/$((P+F)) TESTS FAILED"
+    else echo "ALL $P TESTS PASSED"; fi
+}
 
 main $@
-

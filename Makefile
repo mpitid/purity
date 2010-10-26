@@ -16,7 +16,7 @@ SCRIPTS ?= scripts
 include vsn.mk
 VSN := $(PURITY_VSN)
 
-FILES := purity purity_utils purity_cli purity_plt purity_stats core_aliases cl_parser purity_bifs purity_hofs
+FILES := purity purity_utils purity_cli purity_plt purity_stats core_aliases cl_parser purity_bifs purity_hofs runtest
 SRC   := $(addsuffix .erl, $(FILES))
 BIN   := $(addprefix $(EBIN)/, $(addsuffix .beam, $(FILES)))
 CHEATS := predef/cheats predef/bifs predef/primops
@@ -79,7 +79,7 @@ build_tests: $(TEST_BIN)
 	@echo "Done building test files."
 
 tests: $(BIN) build_tests
-	$(SCRIPTS)/runtests $(TEST_SRC)
+	$(SCRIPTS)/runtests $(TEST_BIN)
 
 units:
 	EFLAGS=-DTEST $(MAKE)

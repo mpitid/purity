@@ -10,7 +10,7 @@
 %% This is because they are bound by a let statement, while
 %% aliases are only found for case clauses:
 %% let X1, Y1 = case cor1, cor2 of ... end
-% f/2 [{local,'X1',[]},{local,'Y1',[]}]
+%< f/2 [{local,'X1',[]},{local,'Y1',[]}]
 f(X, Y) ->
     {X1, Y1} = case {X, Y} of
         {1,1} ->
