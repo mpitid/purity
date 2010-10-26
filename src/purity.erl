@@ -263,9 +263,8 @@ make_modlookup(Filenames) ->
 -spec module(cerl:c_module(), purity_utils:options(), dict()) -> dict().
 
 module(Core, Options, Tab0) ->
-    CoreLabels = label(Core),
-    Module = cerl:concrete(cerl:module_name(CoreLabels)),
-    Defs = [{cerl:var_name(Var), Fun} || {Var, Fun} <- cerl:module_defs(CoreLabels)],
+    Module = cerl:concrete(cerl:module_name(Core)),
+    Defs = [{cerl:var_name(Var), Fun} || {Var, Fun} <- cerl:module_defs(Core)],
     Names = lists:foldl(
         fun({{F,_},_}, Set) -> ordsets:add_element(atom_to_list(F), Set) end,
         ordsets:new(),
@@ -327,10 +326,6 @@ panalyse(Filename, Options) ->
             purity_utils:emsg(Reason),
             Tab
     end.
-
-label(Core) ->
-    {CoreLabels, _Next} = cerl_trees:label(cerl:from_records(Core)),
-    CoreLabels.
 
 
 analyse(Function, St0) ->
