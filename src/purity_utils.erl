@@ -274,7 +274,7 @@ str(Format, Args) ->
 fmt_mfa({M, F, A}) ->
     str("~p:~p/~p", [M, F, A]);
 fmt_mfa({F, A}) ->
-    str("primop ~s:~B", [F, A]).
+    str("primop ~s/~B", [F, A]).
 
 
 %% @doc Remove any functions belonging to Modules from the Table.
@@ -375,7 +375,7 @@ spawn_next(#pst{queue = []} = St0) ->
 
 -spec emsg(string()) -> ok.
 emsg(Msg) ->
-    io:format("ERROR: ~p~n", [Msg]).
+    io:format(standard_error, "ERROR: ~p~n", [Msg]).
 
 -spec emsg(string(), [any()]) -> ok.
 emsg(Msg, Args) ->
