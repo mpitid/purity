@@ -78,3 +78,12 @@ g(F, L) ->
     G = fun(H) -> H(L) end,
     G(F, L).
 
+%% Example of unresolvable case, where we would have to convert
+%% the argument mapping to the correct one for the parent in order
+%% to deduce it is a higher order function (the dep actually has
+%% [{arg,{1,1}}] as args).
+%< k/2 [{local,{nested,'k_2-1',1},[]}]
+k(F, A) ->
+    G = fun(H) -> k(H, func:whatever(A)) end,
+    G(F).
+

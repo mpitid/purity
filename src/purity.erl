@@ -542,6 +542,9 @@ map_nested(_, _, {erl, _} = E, _) ->
 
 check_passed_args(_F, [], _St) ->
     [];
+check_passed_args(_, [{arg,{_,_}}|_], _) ->
+    %% Converting the argument mapping could be tricky so play it safe.
+    unmappable;
 check_passed_args(Fun, [{N, {free, Var}}|T], St) ->
     case is_free(Var, St) of
         true ->
