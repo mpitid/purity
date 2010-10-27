@@ -1,0 +1,37 @@
+#!/usr/bin/env escript
+%% vim: set ft=erlang:
+
+%% Test whether running propagate_both has the same effect as running
+%% both analyses separately and combining the results.
+
+main(Files) ->
+    Tab = purity:modules(Files, [], dict:new()),
+    lists:foreach(
+        fun(L) ->
+                T1 = purity:propagate_both(Tab, [{purelevel,L}]),
+                T2 = propagate_both(Tab, [{purelevel,L}]),
+                compare(L, T1, T2) end,
+        [1,2,3]),
+    halt(0).
+
+propagate_both(Tab, Opts) ->
+    dict:merge(
+        fun(_, V, V) -> V; (_, _, _) -> false end,
+        purity:propagate_purity(Tab, Opts),
+        purity:propagate_termination(Tab, Opts)).
+
+compare(L, T1, T2) ->
+    Fs = runtest:build_filters([filter_reasons, filter_binaries], []),
+    T11 = runtest:apply_filters(dict:to_list(T1), Fs),
+    T22 = runtest:apply_filters(dict:to_list(T2), Fs),
+    case T11 =:= T22 of
+        true -> ok;
+        false ->
+            io:format("TEST FAILED for purelevel ~p~n", [L]),
+            F1 = purity_utils:str("_f1-~b", [L]),
+            F2 = purity_utils:str("_f2-~b", [L]),
+            runtest:dump_term(F1, T11),
+            runtest:dump_term(F2, T22),
+            io:format("vimdiff -R ~s ~s~n", [F1, F2])
+    end.
+

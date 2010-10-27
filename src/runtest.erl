@@ -23,10 +23,13 @@
 
 -export([main/1]).
 
--import(purity_utils, [str/2, internal_function/1]).
+-export([build_filters/2, apply_filters/2]).
+-export([dump_term/2]).
 
 -export([filter_module/1, filter_reasons/1, filter_nested/1,
         filter_args/1, filter_binaries/1, filter_pretty/1]).
+
+-import(purity_utils, [str/2, internal_function/1]).
 
 
 -spec
@@ -173,8 +176,8 @@ filter_pretty(Tab) -> string:join([format(I) || I <- Tab], "\n").
 
 format({K, V}) -> str("~s ~s", [format_key(K), format_val(V)]).
 
-format_key({M,F,A}) -> str("~s:~s/~b", [M,F,A]);
-format_key({P,A}) -> str("~s/~b", [P,A]);
+format_key({M,F,A}) when is_integer(A) -> str("~s:~s/~b", [M,F,A]);
+format_key({P,A}) when is_atom(P), is_integer(A) -> str("~s/~b", [P,A]);
 format_key(K) -> str("~p",[K]).
 
 format_val(true) -> "pure";

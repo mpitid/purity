@@ -289,6 +289,8 @@ relevant({purelevel, _}) ->
     true;
 relevant(termination) ->
     true;
+relevant(both) ->
+    true;
 relevant(_) ->
     false.
 

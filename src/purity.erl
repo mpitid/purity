@@ -29,7 +29,8 @@
 -export([module/3, modules/3]).
 -export([pmodules/3, panalyse/2]).
 -export([is_pure/2]).
--export([propagate/2, propagate_termination/2, propagate_purity/2, find_missing/1]).
+-export([propagate/2, propagate_termination/2, propagate_purity/2,
+         propagate_both/2, find_missing/1]).
 -export([analyse_changed/3]).
 
 -import(purity_utils, [fmt_mfa/1, str/2]).
@@ -969,18 +970,52 @@ sub_new() -> {dict:new(), dict:new()}.
 propagate(Tab, Opts) ->
     case option(both, Opts) of
         true ->
-            T1 = propagate_purity(Tab, Opts),
-            T2 = propagate_termination(Tab, Opts),
-            dict:merge(fun preserve_matching/3, T1, T2);
+            propagate_both(Tab, Opts);
         false ->
             case option(termination, Opts) of
-                true -> propagate_termination(Tab, Opts);
-                false -> propagate_purity(Tab, Opts)
+                true ->
+                    propagate_termination(Tab, Opts);
+                false ->
+                    propagate_purity(Tab, Opts)
             end
     end.
 
-preserve_matching(_K, V, V) -> V;
-preserve_matching(_K, _, _) -> false.
+
+%% @doc Combine the propagation into one function, which is
+%% significantly faster. First perform an impure purity propagation,
+%% and then run the termination analysis.
+-spec propagate_both(dict(), purity_utils:options()) -> dict().
+
+propagate_both(Tab0, Opts) ->
+    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF)),
+    Vs =
+        case option(purelevel, Opts, 1) of
+          1 -> [false, true, true];
+          2 -> [false, false, true];
+          3 -> [false, false, false]
+      end,
+    %% Note that 'receive' will be covered by side_effects.
+    KVs = lists:zip([side_effects, non_determinism, exceptions], Vs),
+    Tab2 = update(Tab1, KVs),
+    St0 = #pst{funs = collect_impure(Tab2),
+               revs = purity_utils:rev_deps(Tab2),
+               rsns = option(with_reasons, Opts),
+               table = Tab2},
+    St1 = propagate_impure(St0),
+    Tab3 = remove_selfrec(termination, St1#pst.table),
+    Funs = recursive_functions(Tab3),
+    Tab4 = update(Tab3, Funs, false),
+    converge_pst(fun propagate_termination_loop/1,
+                 St1#pst{funs = Funs, table = Tab4}).
+
+collect_impure(Tab) ->
+    dict:fold(fun collect_impure/3, [], Tab).
+
+collect_impure(F, V, A) ->
+    case impure_val(V) of
+        true -> [F|A];
+        false -> A
+    end.
 
 
 %% @doc Crude and very conservative termination analysis.
@@ -1000,14 +1035,13 @@ propagate_termination(Tab0, Opts) ->
     KeyVals = [
         {side_effects, true}, {non_determinism, true}, {exceptions, true},
         {{erl, {'receive', infinite}}, false}],
-    Tab2 = without_subset_recursion(merge(Tab1, dict:from_list(KeyVals))),
+    Tab2 = remove_selfrec(termination, merge(Tab1, dict:from_list(KeyVals))),
     Funs = recursive_functions(Tab2),
     Tab3 = update(Tab2, Funs, {false, <<"recursion">>}),
-    converge_pst(
-        fun propagate_termination_loop/1,
-        #pst{funs = Funs, table = Tab3,
-             rsns = option(with_reasons, Opts),
-             revs = purity_utils:rev_deps(Tab3)}).
+    converge_pst(fun propagate_termination_loop/1,
+                 #pst{funs = Funs, table = Tab3,
+                      rsns = option(with_reasons, Opts),
+                      revs = purity_utils:rev_deps(Tab3)}).
 
 propagate_termination_loop(#pst{table = Tab0} = St0) ->
     {Pure, Impure} = collect_concrete(Tab0),
@@ -1018,50 +1052,10 @@ propagate_termination_loop(#pst{table = Tab0} = St0) ->
     St4.
 
 recursive_functions(Tab) ->
+    %% This could also be expanded with digraph_utils:reaching,
+    %% but there is no performance gain.
     [F || C <- digraph_utils:cyclic_strong_components(dependency_graph(Tab)),
           F <- C].
-
-%% @doc Remove any self-recursive dependencies which consume one of
-%% their arguments.
-without_subset_recursion(Tab) ->
-    dict:map(fun without_subset_recursion/2, Tab).
-
-without_subset_recursion(F, C) when is_list(C) ->
-    RecArgs = [A || {_, D, A} <- C, D =:= F],
-    C1 =
-      case all_subsets(RecArgs) andalso no_high_callsite(RecArgs) of
-          true -> [D || D <- C, not self_dep(F, D)];
-          false -> C end,
-    lists:usort(clear_sub(C1));
-without_subset_recursion(_, C) ->
-    C.
-
-clear_sub(C) ->
-    [clear_sub1(D) || D <- C].
-
-clear_sub1({T,F,Args}) when is_list(Args) ->
-    {T, F, [A || A <- Args, not sub(A)]};
-clear_sub1(D) ->
-    D.
-
-sub({sub,_}) -> true;
-sub(_) -> false.
-
-%% @doc Check whether all calls have at least one common subset as
-%% argument.
-all_subsets(Args) ->
-    case [ordsets:from_list([N || {sub, N} <- A]) || A <- Args] of
-        [] -> false;
-        [H|T] -> [] =/= lists:foldl(fun ordsets:intersection/2, H, T)
-    end.
-
-%% @doc Check whether there is no concrete call for recursive higher
-%% order functions.
-no_high_callsite(Args) ->
-    not lists:any(fun concrete_arg/1, lists:flatten(Args)).
-
-concrete_arg({_N, {_M,_F,_A}}) -> true;
-concrete_arg(_) -> false.
 
 %% @spec propagate_purity(dict(), purity_utils:options()) -> dict()
 %%
@@ -1078,21 +1072,18 @@ concrete_arg(_) -> false.
 -spec propagate_purity(dict(), purity_utils:options()) -> dict().
 
 propagate_purity(Tab0, Opts) ->
-    Fse = {false, bin(fmt_dep(side_effects))},
-    Fnd = {false, bin(fmt_dep(non_determinism))},
-    Fex = {false, bin(fmt_dep(exceptions))},
-    Vals =
+    Vs =
       case option(purelevel, Opts, 1) of
-          1 -> [Fse, true, true];
-          2 -> [Fse, Fnd, true];
-          3 -> [Fse, Fnd, Fex]
+          1 -> [false, true, true];
+          2 -> [false, false, true];
+          3 -> [false, false, false]
       end,
-    KeyVals = lists:zip([side_effects, non_determinism, exceptions], Vals),
-    Tab1 = without_self_deps(
-        merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KeyVals))),
+    KVs = lists:zip([side_effects, non_determinism, exceptions], Vs),
+    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KVs)),
+    Tab2 = remove_selfrec(purity, Tab1),
     converge_pst(fun propagate_loop/1,
-                 #pst{revs = purity_utils:rev_deps(Tab1),
-                      table = Tab1, rsns = option(with_reasons, Opts)}).
+                 #pst{revs = purity_utils:rev_deps(Tab2),
+                      table = Tab2, rsns = option(with_reasons, Opts)}).
 
 %% Higher order analysis should replace call_site analysis completely
 %% at some point, but currently it is still useful for functions which
@@ -1108,46 +1099,121 @@ propagate_loop(#pst{table = Tab} = St0) ->
     St5.
 
 
+%%% Recursion Handling %%%
+
+remove_selfrec(purity, Tab) ->
+    dict:map(fun remove_selfrec_p/2, Tab);
+remove_selfrec(termination, Tab) ->
+    dict:map(fun remove_selfrec_t/2, Tab).
+
 %% Observing that only the purity of certain higher order functions
 %% may depend on recursive dependencies, remove them from all other
-%% cases to simplify the rest of the analysis.
-without_self_deps(Tab) ->
-    dict:map(fun without_self_deps/2, Tab).
+%% cases to simplify the rest of purity analysis.
+remove_selfrec_p(F, C) when is_list(C) ->
+    Keep =
+      case is_hof(C) of
+          true ->
+              Exp = [N || {arg,N} <- C],
+              fun({_, D, Args}) when F =:= D ->
+                      passes_unknown_fun(Args, Exp);
+                 (_) -> true end;
+          false ->
+              fun(D) -> not selfrec(F, D) end
+      end,
+    [D || D <- C, Keep(D)];
+remove_selfrec_p(_, V) -> V.
 
-without_self_deps(F, C) when is_list(C) ->
-    case lists:any(fun arg_dep/1, C) of
+%% @doc Remove any self-recursive dependencies which consume one of
+%% their arguments.
+remove_selfrec_t(F, C) when is_list(C) ->
+    case is_hof(C) andalso prevent_removal(F, C) of
         true ->
-            %% Higher order function, it is not always safe to remove
-            %% the recursive dep in this case.
-            Expecting = [N || {arg, N} <- C],
-            [D || D <- C, not self_dep_same_arg(F, D, Expecting)];
+            clear_sub(C);
         false ->
-            [D || D <- C, not self_dep(F, D)]
+            remove_selfrec_with_subset(F, C)
     end;
-without_self_deps(_, V) ->
-    V.
+remove_selfrec_t(_, V) -> V.
 
-%% A recursive call within a HOF can be safely ignored if the
-%% arguments passed to it are some permutation of the arguments
-%% expected as higher order functions, e.g.
+remove_selfrec_with_subset(F, C) ->
+    RecArgs = [A || {_, D, A} <- C, D =:= F],
+    C1 =
+      case all_subsets(RecArgs) andalso no_high_callsite(RecArgs) of
+          true ->
+              [D || D <- C, not selfrec(F, D)];
+          false ->
+              C
+      end,
+    %% Subset information is no longer useful so remove it.
+    lists:usort(clear_sub(C1)).
+
+selfrec(F, {_, F, _}) ->
+    true;
+selfrec(_, _) ->
+    false.
+
+%% Prevent subset recursion removal for hofs which pass unknown
+%% functions to the recursive call.
+prevent_removal(F, C) ->
+    Exp = [N || {arg, N} <- C],
+    lists:any(
+        fun({_, D, Args}) when F =:= D ->
+                    passes_unknown_fun(Args, Exp);
+           (_) -> false end,
+        C).
+
+%% @doc Check if the arguments passed to a recursive call in a HOF
+%% HOF are not some permutation of the arguments expected as higher
+%% order functions, e.g.
 %% > a(F, G, A) -> G(F(A)),..., a(F, G, _). or a(G, F, _).
-self_dep_same_arg(F, {_, F, Args}, Expecting) ->
+%% In such cases the self-recursive dependency should be preserved (and
+%% make the function impure) since we cannot statically deduce its
+%% purity or termination.
+passes_unknown_fun(Args, Expecting) ->
     ESet = ordsets:from_list(Expecting),
     ASet = ordsets:from_list([N || {arg, {N, K}} <- Args,
-            ordsets:is_element(K, ESet)]),
-    ESet =:= ASet; %% Cheat a little on the comparison
-self_dep_same_arg(_F, _NonSelfDep, _) ->
-    false.
+                                   ordsets:is_element(K, ESet)]),
+    ESet =/= ASet. %% Safe to compare ordsets directly.
 
-self_dep(F, {_, F, _}) ->
-    true;
-self_dep(_, _) ->
-    false.
+%% @doc Check whether all calls have at least one common subset as
+%% argument.
+all_subsets(Args) ->
+    case [ordsets:from_list([N || {sub, N} <- A]) || A <- Args] of
+        [] -> false;
+        [H|T] -> [] =/= lists:foldl(fun ordsets:intersection/2, H, T)
+    end.
+
+%% @doc Check whether there is no concrete call for recursive higher
+%% order functions.
+%% XXX What about checking for HOF first? Could it be an indirect HOF?
+no_high_callsite(Args) ->
+    not lists:any(fun concrete_arg/1, lists:flatten(Args)).
+
+concrete_arg({_N, {_M,_F,_A}}) -> true;
+concrete_arg(_) -> false.
+
+is_hof(C) ->
+    lists:any(fun arg_dep/1, C).
 
 arg_dep({arg, _}) ->
     true;
 arg_dep(_) ->
     false.
+
+clear_sub(C) ->
+    [clear_sub1(D) || D <- C].
+
+clear_sub1({T,F,Args}) when is_list(Args) ->
+    {T, F, [A || A <- Args, not sub(A)]};
+clear_sub1(D) ->
+    D.
+
+sub({sub,_}) ->
+    true;
+sub(_) ->
+    false.
+
+
+%%% Propagation Helpers %%%
 
 converge_pst(Fun, #pst{table = Tab} = St0) ->
     case Fun(St0) of
@@ -1182,7 +1248,7 @@ propagate_pure(#pst{funs = Funs0, prev = Set0, table = Tab0} = St) ->
     Set1 = add_elements(Funs0, Set0),
     Deps = [D || F <- Funs0, D <- fetch_deps(F, St#pst.revs),
                  not sets:is_element(D, Set1),
-                 is_pure(dict:fetch(D, Tab1))],
+                 pure_val(dict:fetch(D, Tab1))],
     propagate_pure(St#pst{funs = lists:usort(Deps), prev = Set1, table = Tab1}).
 
 %% When propagating impure results, try to keep track of the reason
@@ -1265,13 +1331,6 @@ remove_from_ctx(Table, Funs) ->
         fun(_F, Ctx) when is_list(Ctx) -> ordsets:filter(Pred, Ctx);
            (_F, Val) -> Val end,
         Table).
-
-is_pure(true) ->
-    true;
-is_pure([]) ->
-    true;
-is_pure(_) ->
-    false.
 
 
 higher_analysis(#pst{table = Tab, revs = Rev} = St) ->
@@ -1523,10 +1582,6 @@ unzip1(Items) ->
 %% @doc Extract the Nth elements from a list of tuples.
 unzipN(N, Items) ->
     [element(N, Tuple) || Tuple <- Items].
-
-
-bin(S) when is_list(S) ->
-    list_to_binary(S).
 
 bin(Fmt, Args) ->
     list_to_binary(io_lib:format(Fmt, Args)).

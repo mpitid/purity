@@ -34,18 +34,21 @@ no_high_callsite_test_() ->
     ,?_assertNot(no_high_callsite([[], [{1,{r,g,1}}]]))
 ].
 
-without_subset_recursion_test_() ->
+remove_selfrec_t_test_() ->
     [?_assertMatch([],
-        without_subset_recursion(f, [{l,f,[{sub,1}]}, {r,f,[{arg,{1,2}},{arg,3},{sub,1}]}]))
+        remove_selfrec_t(f, [{l,f,[{sub,1}]}, {r,f,[{arg,{1,2}},{arg,3},{sub,1}]}]))
     ,?_assertMatch([{l,f,[]}],
-        without_subset_recursion(f, [{l,f,[{sub,1}]}, {l,f,[]}, {l,f,[{sub,2}]}]))
+        remove_selfrec_t(f, [{l,f,[{sub,1}]}, {l,f,[]}, {l,f,[{sub,2}]}]))
     %% Not self-recursion, only clear subsets (not currently possible but still).
     ,?_assertMatch([{arg,2},{r,g,[]},{r,g,[{1,{r,a,1}}]}], %% Should be sorted!
-        without_subset_recursion(f, [{arg,2}, {r,g,[{sub,1},{1,{r,a,1}}]}, {r,g,[{sub,1}]}]))
-    %% high_callsite, so no removal.
+        remove_selfrec_t(f, [{arg,2}, {r,g,[{sub,1},{1,{r,a,1}}]}, {r,g,[{sub,1}]}]))
+    %% high_callsite, so no removal. XXX: Shouldn't also be HOF with {arg,_} dep?
     ,?_assertMatch([{r,f,[{1,{r,g,2}}]}],
-        without_subset_recursion(f, [{r,f,[{1,{r,g,2}},{sub,1}]}]))
-    ,?_assertMatch(v, without_subset_recursion(f, v))
+        remove_selfrec_t(f, [{r,f,[{1,{r,g,2}},{sub,1}]}]))
+    ,?_assertMatch(v, remove_selfrec_t(f, v))
+    %% hof with unknown argument passed
+    ,?_assertMatch([{arg,1}, {r,f,[{arg,{2,1}}]}],
+        remove_selfrec_t(f, [{arg,1}, {r,f,[{arg,{2,1}},{sub,1}]}]))
 ].
 
 clear_sub_test_() ->

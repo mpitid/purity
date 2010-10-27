@@ -3,6 +3,8 @@
 
 %%% Test various aspects of higher order functions. %%%
 
+%< global [{test,with_reasons},with_reasons]
+
 %% Some simple preliminary cases, which should be easily resolvable
 %% with call site analysis. The b/c functions should be equivalent.
 
@@ -41,18 +43,21 @@ e() ->
 %% This is somewhat contrived, but for a real life example look at
 %% `dets_utils:leafs_to_nodes/4'.
 %< f/2 [{arg,1}]
+%< [termination] f/2 {false,"recursion"}
 f(_F, none) ->
     f(fun erlang:abs/1, 21);
 f(F, N) when is_integer(N) ->
     F(N) * 2.
 
 %< g/2 {false,"call to impure higher:g/2"}
+%< [termination] g/2 {false,"recursion"}
 g(_F, none) ->
     g(fun erlang:put/2, 21);
 g(F, Val) ->
     F(key, 2 * Val).
 
 %< h/0 true
+%< [termination] h/0 {false,"call to impure higher:f/2"}
 h() ->
     f(fun erlang:abs/1, 21).
 
@@ -87,6 +92,7 @@ l(_, _, []) ->
 
 %% Example of an unresolvable unknown function (an element of the list).
 %< m/2 [{arg,1},{local,{higher,m,2},[]}]
+%< [termination] m/2 {false,"recursion"}
 m(F, [G,E|T]) ->
     [F(E)|m(G, T)];
 m(_, []) ->
