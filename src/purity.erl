@@ -483,8 +483,8 @@ promote_nested(#state{mfa = Fun, ctx = Ctx} = St) ->
     Promoted = lists:flatten([map_nested(Fun, N, St) || N <- Nested]),
     St#state{ctx = ctx_rem(remove, ctx_add_many(Promoted, Rest))}.
 
-is_nested({_, Fun, _}, #state{nested = Nst}) ->
-    nst_mem(Fun, Nst);
+is_nested({_, Fun, _}, #state{nested = Nst, mfa = MFA}) ->
+    Fun =/= MFA andalso nst_mem(Fun, Nst);
 is_nested(_, _) ->
     false.
 
