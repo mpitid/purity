@@ -2,6 +2,7 @@
 
 scripts=$(dirname $0)
 source $scripts/common
+tests=test
 
 main() {
     dir=$(make_tempfile -dt ptests.XXXXXXX)
@@ -14,6 +15,8 @@ main() {
     done
     rmdir $dir
     report
+
+    extra_tests
 }
 
 runtest() { erl_exec runtest main $@ }
@@ -22,6 +25,11 @@ failed() { ((F++)) }
 report() {
     if ((F>0)); then echo "$F/$((P+F)) TESTS FAILED"
     else echo "ALL $P TESTS PASSED"; fi
+}
+
+extra_tests() {
+    $tests/duplicates $tests/d1/a.erl $tests/d2/a.erl
+    $tests/combined_analysis $tests/*.erl
 }
 
 main $@

@@ -314,23 +314,35 @@ modules(Modules, Options, Tab0) when is_list(Modules) ->
 
 pmodules(Modules, Options, Tab0) when is_list(Modules) ->
     CPUs = erlang:system_info(logical_processors),
-    prune_merge([Tab0 | purity_utils:pmap({purity, panalyse}, [Options], Modules, CPUs)]).
+    prune_merge(Tab0,
+                lists:zip([filename_to_module(M) || M <- Modules],
+                          purity_utils:pmap({purity, panalyse},
+                                            [Options], Modules, CPUs))).
 
-prune_merge([T0|Ts]) ->
-    lists:foldl(fun prune_merge/2, T0, Ts).
+%% Before merging the tables remove any values with the same module
+%% that may be contained already. To make this faster first index
+%% on the module, so that there is no need to traverse the whole
+%% table to remove the values.
+prune_merge(Tab, MTs) ->
+    ungroup(update(group(Tab), MTs)).
 
-prune_merge(T1, T0) ->
-    %% The new table contains the results of a single module.
-    %% Remove any entries for that module from the old table
-    %% and then merge the two.
-    [M] = lists:usort(unzip1(dict:fetch_keys(T1))),
-    dict:merge(fun(_, _, _) -> throw(never_happens) end,
-               T1, dict:filter(fun(K, _) -> not_module(K, M) end, T0)).
+%% Group all values sharing the same module to a single key.
+group(Tab) ->
+    dict:fold(fun group_add/3, dict:new(), Tab).
 
-not_module({M,_,_}, M) ->
-    false;
-not_module(_, _) ->
-    true.
+group_add({M,_,_}=K, V, T) ->
+    dict_cons(M, {K, V}, T);
+group_add(K, V, T) ->
+    %% Make sure non-MFA keys are not overwritten, hence the tuple.
+    dict_cons({non_mfa}, {K, V}, T).
+
+ungroup(Tab) ->
+    %% The values of the first table are grouped as a list,
+    %% while those of the rest as dicts.
+    dict:fold(fun(_, Vs, T) when is_list(Vs) -> update(T, Vs);
+                 (_, Vs, T) -> dict:fold(fun dict:store/3, T, Vs) end,
+              dict:new(), Tab).
+
 
 -spec panalyse(file:filename(), purity_utils:options()) -> dict().
 
