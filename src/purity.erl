@@ -314,7 +314,23 @@ modules(Modules, Options, Tab0) when is_list(Modules) ->
 
 pmodules(Modules, Options, Tab0) when is_list(Modules) ->
     CPUs = erlang:system_info(logical_processors),
-    merge([Tab0 | purity_utils:pmap({purity, panalyse}, [Options], Modules, CPUs)]).
+    prune_merge([Tab0 | purity_utils:pmap({purity, panalyse}, [Options], Modules, CPUs)]).
+
+prune_merge([T0|Ts]) ->
+    lists:foldl(fun prune_merge/2, T0, Ts).
+
+prune_merge(T1, T0) ->
+    %% The new table contains the results of a single module.
+    %% Remove any entries for that module from the old table
+    %% and then merge the two.
+    [M] = lists:usort(unzip1(dict:fetch_keys(T1))),
+    dict:merge(fun(_, _, _) -> throw(never_happens) end,
+               T1, dict:filter(fun(K, _) -> not_module(K, M) end, T0)).
+
+not_module({M,_,_}, M) ->
+    false;
+not_module(_, _) ->
+    true.
 
 -spec panalyse(file:filename(), purity_utils:options()) -> dict().
 
@@ -1573,10 +1589,6 @@ option(Name, Options, Default) ->
 %% conflicts arise.
 merge(D1, D2) ->
     dict:merge(fun(_K, _V1, V2) -> V2 end, D1, D2).
-
-%% @doc Merge a non-empty list of dictionaries.
-merge([D0|Ds]) ->
-    lists:foldl(fun merge/2, D0, Ds).
 
 %% @doc Extract the first elements from a list of tuples.
 unzip1(Items) ->
