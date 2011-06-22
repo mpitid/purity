@@ -22,7 +22,6 @@
 %%%
 %%% @doc Pureness analysis of Erlang functions.
 %%%
-
 -module(purity).
 
 -export([module/2]).
@@ -32,6 +31,8 @@
 -export([propagate/2, propagate_termination/2, propagate_purity/2,
          propagate_both/2, find_missing/1]).
 -export([analyse_changed/3]).
+
+-export([propagate_new/2, purity_of/2, convert/2]).
 
 -import(purity_utils, [fmt_mfa/1, str/2]).
 -import(purity_utils, [remove_args/1, dict_cons/3, filename_to_module/1]).
@@ -1007,7 +1008,8 @@ propagate(Tab, Opts) ->
                 true ->
                     propagate_termination(Tab, Opts);
                 false ->
-                    propagate_purity(Tab, Opts)
+                    %propagate_purity(Tab, Opts)
+                    propagate_new(Tab, Opts)
             end
     end.
 
@@ -1612,4 +1614,542 @@ unzipN(N, Items) ->
 
 bin(Fmt, Args) ->
     list_to_binary(io_lib:format(Fmt, Args)).
+
+
+
+%%% Simplified algorithm %%%
+
+%% @doc State record for the new algorithm.
+-record(s, {tab :: dict(),
+            rev :: dict(),
+            unk  = sets:new() :: set(),
+            diff = dict:new() :: dict(),
+            ws   = []         :: list(),
+            cs   = sets:new() :: set()}).
+
+%% Migration helpers:
+%% Convert values from the previous algorithm to the ones needed by
+%% the current one. Handle new values transparently, as will also
+%% be used on new tables when loading from a PLT.
+
+%% The new value is a 2-tuple: {Purity, Dependency List}
+convert_value(true) ->
+    {p, []};
+convert_value([exceptions]) ->
+    {e, []};
+convert_value(false) ->
+    {s, []};
+convert_value({false, _}) ->
+    {s, []};
+convert_value([side_effects]) ->
+    {s, []};
+convert_value([non_determinism]) ->
+    {d, []};
+convert_value(C) when is_list(C) ->
+    {p, C};
+convert_value(undefined) ->
+    % This is a bit of a hack: in order to mark it unhandled, add a
+    % nonsensical dependency.
+    {p, [undefined]};
+convert_value({_P, D} = NewValue) when is_list(D) ->
+    NewValue. % Preserve new type values.
+
+
+%%% Pureness values have a well defined ordering: s > d > e > p
+%% @doc Implement the ordering relation of purity values.
+sup(e, p) -> e;
+sup(d, p) -> d;
+sup(d, e) -> d;
+sup(s, _) -> s;
+sup(A, A) -> A;
+sup(A, B) -> sup(B, A).
+
+sup(Values) when is_list(Values) ->
+    lists:foldl(fun sup/2, p, Values).
+
+-spec propagate_new(dict(), purity_utils:options()) -> dict().
+
+propagate_new(Tab, _Opts) ->
+    %% These functions work on previous types of values.
+    T1 = remove_selfrec(purity, add_predefined(add_bifs(Tab))),
+    T2 = dict_vmap(fun convert_value/1, T1),
+
+    S0 = #s{tab = T2,
+            rev = purity_utils:rev_deps(T1)},
+
+    S1 = preprocess(S0),
+    T3 = converge_contaminate(S1#s{ ws = initial_workset(S1#s.tab) }),
+    S2 = postprocess(S1#s{tab = T3}),
+
+    S2#s.tab.
+
+
+%% @doc Update table with predefined values for certain expressions.
+add_predefined(Tab) ->
+    lists:foldl(fun({K, V}, D) -> dict:store(K, V, D) end, Tab, ?PREDEF).
+
+
+%% @doc Build the initial working set, consisting of any values with empty
+%% dependency lists.
+initial_workset(Tab) ->
+    % Guaranteed no duplicates, so ordsets:from_list == lists:sort.
+    lists:sort(dict:fold(
+            fun(F, {_P, []}, W) -> [F|W]; (_, _, W) -> W end,
+            [], Tab)).
+
+
+%%% Contamination: This is the core of the algorithm.
+%%% Pureness values contaminate dependent functions, and functions
+%%% whose dependency list has been completely %% resolved are added
+%%% to the working set.
+
+converge_contaminate(#s{tab = T} = S0) ->
+    case remove_scc(contaminate(S0)) of
+        #s{tab = T} -> T;
+        S1 -> converge_contaminate(S1)
+    end.
+
+contaminate(#s{ws = []} = S) ->
+    S;
+contaminate(#s{ws = W} = S) ->
+    contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, W)).
+
+contaminate(E, #s{} = S) ->
+    Dependent = [F || F <- reverse_deplist(E, S), not visited(F, S)],
+    set_visited(E, contaminate(E, Dependent, S)).
+
+contaminate(_, [], S) ->
+    S;
+contaminate(E, [F|Fs], #s{tab = T} = S0) ->
+    count(c3),
+    {Pe,_De} = lookup(E, T),
+    {Pf, Df} = lookup(F, T),
+    S1 =
+      case { sup(Pe, Pf), remove_dep(E, Df) } of
+        {P, D} when P =:= s orelse D =:= [] ->
+            %% Fully-resolved function, strip dependency list.
+            update_tab(F, P, [], extend_workset(F, S0));
+        {P, D} ->
+            update_tab(F, P, D, S0)
+      end,
+    contaminate(E, Fs, S1).
+
+
+%%% State record helpers.
+
+reverse_deplist(Function, #s{rev = R}) ->
+    dict_fetch(Function, R, []).
+
+visited(F, #s{cs = C}) ->
+    sets:is_element(F, C).
+
+set_visited(F, #s{cs = C} = S) ->
+    S#s{cs = sets:add_element(F, C)}.
+
+extend_workset(F, #s{ws = W} = S) ->
+    S#s{ws = ordsets:add_element(F, W)}.
+
+update_tab(Function, Purity, DepList, #s{tab = T} = S) ->
+    S#s{tab = dict:store(Function, {Purity, DepList}, T)}.
+
+lookup(Function, Table) ->
+    dict:fetch(Function, Table).
+
+lookup_purity(Function, Table) ->
+    element(1, lookup(Function, Table)).
+
+lookup_deplist(Function, Table) ->
+    element(2, lookup(Function, Table)).
+
+
+%%% Dependency List helpers.
+
+%% Dependencies could be simplified in this stage,
+%% for instance lacking type and argument lists.
+%% However, these would need to be restored afterwards, for
+%% any remaining dependencies, so that they remain a part of the PLT.
+remove_dep(F, DepList) ->
+    lists:filter(
+        fun({_, D, _})    -> F =/= D;
+           ({erl, _} = D) -> F =/= D;
+           ({primop,_}=D) -> F =/= D;
+           (_) -> true end,
+       DepList).
+
+
+%%% Analysis of mutually recursive functions.
+
+%% FIXME: Naming of functions.
+remove_scc(S) ->
+    resolve_mutual(S).
+
+resolve_mutual(#s{tab = T, ws = W} = S) ->
+    [] = W,
+    ICCs = with_graph(build_call_graph(T), fun locate_iccs/1),
+    S#s{tab = lists:foldl(fun sup_mutual/2, T, ICCs),
+        ws = workset(W ++ lists:flatten(ICCs))}.
+
+sup_mutual(Fs, T) ->
+    P = sup([lookup_purity(F, T) || F <- Fs]),
+    lists:foldl(fun(F, Tn) -> dict:store(F, {P, []}, Tn) end, T, Fs).
+
+
+locate_iccs(G) ->
+    with_graph(digraph_utils:condensation(G),
+               fun select_independent_components/1).
+
+select_independent_components(G) ->
+    %% Independent components are those which do not depend on any others.
+    %% We are interested in the subset of those which form a cycle.
+    %% It follows that there will be a loop in the condensed graph,
+    %% therefore: out_neighbours(V) == [V] and member(V, in_neighbours(V)).
+    %% Finally, only vertices with at least 2 elements are of interest.
+    %% With such vertices, the condition can be simplified to
+    %% 1 == out_degree(V), as an optimisation.
+    [V || [_,_|_] = V <- digraph:vertices(G),
+        1 =:= digraph:out_degree(G, V),
+          assert_independence(G, V)].
+
+-ifdef(NOASSERT).
+assert_independence(_, _) -> true.
+-else.
+assert_independence(G, V) ->
+    In = digraph:in_neighbours(G, V),
+    Out = digraph:out_neighbours(G, V),
+    [V] = Out,
+    %% Only when length(In) > 1 will the algorithm progress
+    %% afterwards. This could be exploited, but the gain is
+    %% marginal, the current bottleneck is the first contamination.
+    true = lists:member(V, In).
+-endif.
+
+build_call_graph(Table) ->
+    dict:fold(fun build_call_graph/3, digraph:new(), Table).
+
+build_call_graph(F, {_P, D}, G) when is_list(D) ->
+    Deps = lists:usort([collect_dep(Dep) || Dep <- D]),
+    digraph:add_vertex(G, F),
+    lists:foreach(
+        fun(Dep) ->
+                digraph:add_vertex(G, Dep),
+                digraph:add_edge(G, F, Dep) end,
+        Deps),
+    G.
+
+collect_dep({_, {_,_,_}=MFA, A}) when is_list(A) ->
+    MFA;
+collect_dep({primop, P, A}) when is_list(A) ->
+    P;
+collect_dep({erl, _} = E) ->
+    E;
+%% Anything unresolvable is represented by a dependency to `undefined'.
+collect_dep({_, V, A}) when is_list(A), is_atom(V) -> %% Variable funs.
+    undefined;
+collect_dep({free, _}) ->
+    undefined;
+collect_dep(undefined) ->
+    undefined.
+
+
+
+%%% Pre-Processing step:
+
+preprocess(#s{tab = T} = S) ->
+    reset_visited(
+        strip_arg_deps(
+            unfold_hofs(
+                S#s{ ws = initial_pre_workset(T) }))).
+
+initial_pre_workset(Tab) ->
+    dict:fold(fun collect_hofs/3, [], Tab).
+
+collect_hofs(F, {_P, D}, W) ->
+    case is_hof(D) of
+        true -> [F|W];
+        false -> W
+    end.
+
+unfold_hofs(#s{ws = []} = S) ->
+    S;
+unfold_hofs(#s{ws = [F|Fs]} = S0) ->
+    Rs = reverse_deplist(F, S0),
+    S1 = unfold_hofs_dep_loop(F, Rs, S0#s{ws = Fs}),
+    unfold_hofs(S1).
+
+unfold_hofs_dep_loop(_, [], S) ->
+    S;
+unfold_hofs_dep_loop(F, [R|Rs], #s{tab = T} = S0) ->
+    Df = lookup_deplist(F, T),
+    Dr = lookup_deplist(R, T),
+    Sn =
+      case concrete_calls(F, Df, Dr, T) of
+        {all, PassedFunctions} ->
+            extend_deplist_with_funs(R, PassedFunctions, S0);
+
+        {maybe_some, PassedFunctions} ->
+            S1 = extend_deplist_with_funs(R, PassedFunctions, S0),
+
+            {Which, IndirectPositions} = indirect_args(F, Df, Dr),
+            S2 = extend_deplist_with_args(R, IndirectPositions, S1),
+
+            case Which of
+                all ->
+                    [] = PassedFunctions,% assert
+                    case visited({F, R}, S0) of
+                        true -> S2;
+                        false -> set_visited({F, R}, extend_workset(R, S2))
+                    end;
+                maybe_some ->
+                    set_unknown(R, S2)
+            end
+      end,
+    unfold_hofs_dep_loop(F, Rs, Sn).
+
+
+%%% PRE: Dependency list helpers.
+extend_deplist_with_funs(Function, NewDeps, #s{tab = T} = S0) ->
+    OldDeps = lookup_deplist(Function, T),
+    Deps = deplist(OldDeps ++ [{remote,D,[]} || D <- NewDeps]),
+    S1 = update_deplist(Function, Deps, S0),
+    update_reverse_deps(Function, NewDeps, S1).
+
+extend_deplist_with_args(Function, Args, #s{tab = T} = S) ->
+    Deps = lookup_deplist(Function, T),
+    update_deplist(Function, deplist(Deps ++ [{arg,A} || A <- Args]), S).
+
+update_deplist(F, D, #s{tab = T} = S) ->
+    P = lookup_purity(F, T),
+    S#s{tab = dict:store(F, {P, D}, T)}.
+
+update_reverse_deps(_, [], S) ->
+    S;
+update_reverse_deps(F, [D|Ds], #s{rev = R} = S) ->
+    %% Only MFAs would be passed as concrete arguments to higher order
+    %% functions.
+    S1 =
+      case purity_utils:is_mfa(D) of
+        true ->
+            Rs = dict_fetch(D, R, []),
+            S#s{rev = dict:store(D, ordsets:add_element(F, Rs), R)};
+        false ->
+            {arg, _} = D,
+            S
+      end,
+    update_reverse_deps(F, Ds, S1).
+
+deplist(Deps) ->
+    ordsets:from_list(Deps).
+
+
+%%% PRE: State record helpers.
+
+set_unknown(F, #s{unk = U} = S) ->
+    S#s{unk = sets:add_element(F, U)}.
+
+reset_visited(#s{} = S) ->
+    S#s{cs = sets:new()}.
+
+
+%%% PRE: HOF helpers.
+
+concrete_calls(F, Df, Dr, T) ->
+    Positions = ordsets:from_list([N || {arg, N} <- Df]),
+    lists:foldl(
+        fun collect_results/2,
+        {all, []},
+        [find_calls(Positions, Args, T) || {_, D, Args} <- Dr, D == F]).
+
+find_calls(Positions, Args, T) ->
+    Fs = [Fun || {N, Fun} <- Args,
+          purity_utils:is_concrete_fun(Fun),
+          ordsets:is_element(N, Positions)],
+    Pred = fun(F) -> {_, D} = dict_fetch(F, T, {p, []}), is_hof(D) end,
+    {_, NotHOFs} = lists:partition(Pred, Fs), % XXX
+    case length(NotHOFs) == length(Positions) of
+        true  -> {all, Fs};
+        false -> {maybe_some, Fs}
+    end.
+
+indirect_args(F, Df, Dr) ->
+    Positions = ordsets:from_list([N || {arg, N} <- Df]),
+    lists:foldl(
+        fun collect_results/2,
+        {all, []},
+        [find_indirect(Positions, Args) || {_, D, Args} <- Dr, D == F]).
+
+
+find_indirect(Positions, Args) ->
+    {Fs, Ts} = lists:unzip([FromTo || {arg, {_From, To} = FromTo} <- Args,
+                            ordsets:is_element(To, Positions)]),
+    case ordsets:from_list(Ts) of
+        Positions -> {all, lists:usort(Fs)};
+        _ -> {maybe_some, lists:usort(Fs)}
+    end.
+
+
+
+collect_results({all, R1}, {all, R2}) ->
+    {all, R1 ++ R2};
+collect_results({_, R1}, {_, R2}) ->
+    {maybe_some, R1 ++ R2}.
+
+
+%% @doc Remove all HOFs from the table in order to keep contamination simple.
+%% Certain HOFs will also have prevented some self-dependencies from being
+%% removed, so get rid of those here too.
+strip_arg_deps(#s{tab = T0} = S) ->
+    {T1, Diff} = dict_mapfold(fun stripper/3, dict:new(), T0),
+    S#s{tab = T1, diff = Diff}.
+
+%% Generate a new deplist with arguments and self-references stripped,
+%% but also keep track of these values in order to restore them later.
+stripper(F, {P, D0}, Diff) ->
+    D1 = [D || D <- D0, not is_arg(D), not is_rec(F, D)],
+    %% Store non-empty diffs only.
+    case ordsets:subtract(D0, D1) of
+        [] -> { {P, D1}, Diff };
+        Df -> { {P, D1}, dict:store(F, Df, Diff) }
+    end.
+
+is_arg({arg, _}) ->
+    true;
+is_arg(_) ->
+    false.
+
+is_rec(F, {_, F, A}) when is_list(A) ->
+    true;
+is_rec(_, _) ->
+    false.
+
+
+restore_arg_deps(#s{tab = T0, diff = Diff} = S) ->
+    T1 = dict:map(
+        fun(F, {P, D0}) ->
+                {P, ordsets:union(D0, dict_fetch(F, Diff, []))} end,
+        T0),
+    S#s{tab = T1}.
+
+
+%%% Post-Processing step:
+
+postprocess(#s{unk = U} = S) ->
+    restore_arg_deps(
+        mark_at_least(
+            propagate_unhandled(
+                S#s{ ws = workset(sets:to_list(U)) }))).
+
+
+%% @doc Create a set comprising of all the functions whose purity was
+%% not conclusively determined.
+%%
+%% These consist of any functions which were marked as unknown during
+%% the pre-processing stage and all those which depend on them, HOFs,
+%% and functions which were left with non-empty dependency lists after
+%% the contamination phase.
+propagate_unhandled(#s{ws = []} = S) ->
+    S;
+propagate_unhandled(#s{ws = [F|Fs]} = S) ->
+    Rs = [R || R <- reverse_deplist(F, S), not unknown(R, S)],
+    propagate_unhandled(set_unknown(F, S#s{ws = workset(Rs ++ Fs)})).
+
+
+% Decided not to mark these as unknown since they can be identified
+% as {at_least, P} by their non-empty dependency list. This way it is
+% possible to distinguish between truly unknown functions when for
+% instance the purity of a function is re-evaluated because one of
+% its missing dependencies has just been found.
+%other_unknown(#s{tab = T, unk = U0} = S) ->
+%    U1 = dict:fold(fun funs_with_non_empty_deplist/3, sets:new(), T),
+%    U2 = sets:from_list(dict:fold(fun collect_hofs/3, [], T)),
+%    S#s{unk = sets:union([U0, U1, U2])}.
+%
+%funs_with_non_empty_deplist(_, {_, []}, S) ->
+%    S;
+%funs_with_non_empty_deplist(F, {_, D}, S) when is_list(D) ->
+%    sets:add_element(F, S).
+
+
+%% @doc Change the purity of unknown functions from P to {at_least, P}.
+mark_at_least(#s{tab = T, unk = U} = S) ->
+    S#s{tab = sets:fold(fun mark_at_least/2, T, U)}.
+
+mark_at_least(F, T) ->
+    {P, D} = lookup(F, T),
+    case P of
+        s -> T; % s == at_least(s).
+        _ -> dict:store(F, { {at_least, P}, D }, T)
+    end.
+
+
+%%% POST: State record helpers.
+
+unknown(F, #s{unk = U}) ->
+    sets:is_element(F, U).
+
+workset(Functions) ->
+    ordsets:from_list(Functions).
+
+
+%%% Miscellaneous helpers.
+
+
+-spec purity_of(any(), dict()) -> atom() | {at_least, atom()}.
+
+purity_of(F, T) ->
+    case dict:fetch(F, T) of
+        %% Fully resolved functions.
+        {P, []} -> P;
+        %% Functions marked unknown.
+        {{at_least, _} = P, _} -> P;
+        %% Functions with non-empty dependency lists.
+        {P, D} when is_atom(P), is_list(D) -> {at_least, P}
+    end.
+
+%% Dict helpers.
+
+dict_vmap(Fun, D) ->
+    dict:map(fun(_, V) -> Fun(V) end, D).
+
+%% @doc Fetch a value from a dict or fallback to a default if missing.
+dict_fetch(Key, Dict, Default) ->
+    case dict:find(Key, Dict) of
+        {ok, Value} -> Value;
+        error -> Default
+    end.
+
+%% @doc Not as efficient as a native implementation would be,
+%% but usefull all the same.
+dict_mapfold(Fun, Acc0, Dict) ->
+    dict:fold(
+        fun(K, V1, {Map, Acc1}) ->
+                {V2, Acc2} = Fun(K, V1, Acc1),
+                {dict:store(K, V2, Map), Acc2} end,
+        {dict:new(), Acc0}, Dict).
+
+
+%% Digraph helpers.
+
+%% @doc The digraph module uses ETS tables which are not garbage collected,
+%% so digraphs have to be explicitly destroyed.
+with_graph(Graph, Function) ->
+    Result = Function(Graph),
+    true = digraph:delete(Graph),
+    Result.
+
+
+%% Convert values to the true/false for comparison with the previous algorith.
+-spec convert(dict(), purity_utils:options()) -> dict().
+convert(Tab, Opts) ->
+    Map = dict:from_list(
+      case option(purelevel, Opts, 1) of
+        1 -> [{p, true}, {e, true}, {d, true}, {s, false}];
+        2 -> [{p, true}, {e, true}, {d, false}, {s, false}];
+        3 -> [{p, true}, {e, false}, {d, false}, {s, false}]
+      end),
+    dict:map(
+        fun(_, {{at_least,P}, []}) -> [P];
+           (_, {{at_least,_P}, D}) -> D;
+           (_, {P, []}) -> dict:fetch(P, Map);
+           (_, {P, D}) -> [P|D] end,
+        Tab).
 

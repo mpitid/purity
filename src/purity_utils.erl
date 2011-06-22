@@ -30,7 +30,7 @@
 -export([filename_to_module/1, delete_modules/2]).
 -export([internal_function/1]).
 -export([rev_deps/1, rev_mod_deps/1]).
--export([collect_dependencies/1, is_concrete_fun/1, is_primop/1]).
+-export([collect_dependencies/1, is_concrete_fun/1, is_primop/1, is_mfa/1]).
 -export([dict_cons/3]).
 
 -export([remove_args/1]).

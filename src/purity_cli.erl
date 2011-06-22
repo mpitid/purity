@@ -99,7 +99,7 @@ main() ->
             Requested = sets:from_list(Modules),
             Print("Results:~n", []),
             lists:foreach(fun(A) -> pretty_print(Print, A) end, lists:sort(
-                    [V || {{M,_,_}=MFA, _} = V <- dict:to_list(Final),
+                    [V || {{M,_,_}=MFA, _} = V <- dict:to_list(purity:convert(Final, Options)),
                         sets:is_element(M, Requested),
                         not purity_utils:internal_function(MFA)]));
         true ->
@@ -130,8 +130,8 @@ main() ->
 
 do_stats(Filename, Modules, Table) ->
     ok = timeit("Generating statistics",
-        fun() -> purity_stats:write(Filename,
-                    purity_stats:gather(Modules, Table)) end).
+        fun() -> stats:write(Filename,
+                    stats:gather(Modules, Table)) end).
 
 do_analysis(Files, Options, Initial) ->
     Table = timeit("Traversing AST", fun() ->
@@ -280,7 +280,7 @@ print_missing(Print, Table) ->
 %% @doc Consistent one-line formatting of purity results. Helps
 %% produce cleaner diffs of the output.
 
--spec fmt(pure()) -> string().
+%-spec fmt(pure()) -> string().
 
 fmt(true) ->
     "true";
@@ -291,7 +291,16 @@ fmt({false, Reason}) ->
 fmt(undefined) ->
     "undefined";
 fmt(Ctx) when is_list(Ctx) ->
-    str("~w", [purity_utils:remove_args(Ctx)]).
+    str("~w", [purity_utils:remove_args(Ctx)]);
+
+fmt({P, []}) -> fmt(P);
+fmt({{at_least,_}=P,_}) -> fmt(P);
+fmt({P, D}) when is_atom(P), is_list(D) -> fmt({at_least, P});
+
+fmt({at_least, P}) ->
+    str(">= ~s", [P]);
+fmt(P) when is_atom(P) ->
+    atom_to_list(P).
 
 
 %% @doc Execute Fun and print elapsed time.
