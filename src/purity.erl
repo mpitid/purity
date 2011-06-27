@@ -1836,20 +1836,36 @@ build_call_graph(F, {_P, D}, G) when is_list(D) ->
         Deps),
     G.
 
-collect_dep({_, {_,_,_}=MFA, A}) when is_list(A) ->
-    MFA;
-collect_dep({primop, P, A}) when is_list(A) ->
-    P;
+
+%% @doc Collect functions, primops and expressions from dependencies.
+%% Anything unresolvable like [free] variable dependencies is
+%% represented by a dependency to `undefined'.
 collect_dep({erl, _} = E) ->
     E;
-%% Anything unresolvable is represented by a dependency to `undefined'.
-collect_dep({_, V, A}) when is_list(A), is_atom(V) -> %% Variable funs.
-    undefined;
+collect_dep({Type, Fun, A}) when is_list(A) ->
+    true = lists:member(Type, [local, remote, primop]),
+    case Type == primop orelse purity_utils:is_mfa(Fun) of
+        true ->
+            Fun;
+        false ->
+            true = is_variable(Fun),
+            undefined
+    end;
 collect_dep({free, _}) ->
     undefined;
 collect_dep(undefined) ->
     undefined.
 
+%% Call with variable module, function or both.
+is_variable({{var, M}, {var, F}, A}) ->
+    true = purity_utils:is_mfa({M,F,A});
+is_variable({{var, M}, F, A}) ->
+    true = purity_utils:is_mfa({M,F,A});
+is_variable({M, {var, F}, A}) ->
+    true = purity_utils:is_mfa({M,F,A});
+%% Variable application.
+is_variable(Var) when is_atom(Var) ->
+    true.
 
 
 %%% Pre-Processing step:
@@ -2024,7 +2040,8 @@ is_rec(_, _) ->
 
 restore_arg_deps(#s{tab = T0, diff = Diff} = S) ->
     T1 = dict:map(
-        fun(F, {P, D0}) ->
+        fun(_, {s, _}=V) -> V;
+           (F, {P, D0}) ->
                 {P, ordsets:union(D0, dict_fetch(F, Diff, []))} end,
         T0),
     S#s{tab = T1}.
