@@ -1704,7 +1704,7 @@ initial_workset(Tab) ->
 %%% to the working set.
 
 converge_contaminate(#s{tab = T} = S0) ->
-    case remove_scc(contaminate(S0)) of
+    case resolve_independent_sccs(contaminate(S0)) of
         #s{tab = T} -> T;
         S1 -> converge_contaminate(S1)
     end.
@@ -1721,7 +1721,6 @@ contaminate(E, #s{} = S) ->
 contaminate(_, [], S) ->
     S;
 contaminate(E, [F|Fs], #s{tab = T} = S0) ->
-    count(c3),
     {Pe,_De} = lookup(E, T),
     {Pf, Df} = lookup(F, T),
     S1 =
@@ -1780,35 +1779,36 @@ remove_dep(F, DepList) ->
 %%% Analysis of mutually recursive functions.
 
 %% FIXME: Naming of functions.
-remove_scc(S) ->
-    resolve_mutual(S).
-
-resolve_mutual(#s{tab = T, ws = W} = S) ->
-    [] = W,
+resolve_independent_sccs(#s{tab = T, ws = []} = S) ->
     ICCs = with_graph(build_call_graph(T), fun locate_iccs/1),
-    S#s{tab = lists:foldl(fun sup_mutual/2, T, ICCs),
-        ws = workset(W ++ lists:flatten(ICCs))}.
+    S#s{tab = lists:foldl(fun set_mutual_purity/2, T, ICCs),
+        ws = workset(lists:flatten(ICCs))}.
 
-sup_mutual(Fs, T) ->
+
+set_mutual_purity(Fs, T) ->
     P = sup([lookup_purity(F, T) || F <- Fs]),
     lists:foldl(fun(F, Tn) -> dict:store(F, {P, []}, Tn) end, T, Fs).
 
 
+%% @doc Locate independent components in the call graph.
+%%
+%% Independent components are strongly connected components without
+%% dependencies to other SCCs. Specifically, we are interested in the
+%% subset of those components which form a cycle between them, i.e.
+%% represent mutually recursive functions. These components will be any
+%% vertices of the condensed graph with a loop. The relation they
+%% satisfy is more accurately the following:
+%%   `out_neighbours(V) == [V] and member(V, in_neighbours(V))'
+%% Since we are only interested in condensed vertices with at least 2
+%% elements, which can be pattern matched, the condition is then
+%% simplified to `out_degree(V) == 1'.
 locate_iccs(G) ->
-    with_graph(digraph_utils:condensation(G),
-               fun select_independent_components/1).
+    with_graph(digraph_utils:condensation(G), fun select_iccs/1).
 
-select_independent_components(G) ->
-    %% Independent components are those which do not depend on any others.
-    %% We are interested in the subset of those which form a cycle.
-    %% It follows that there will be a loop in the condensed graph,
-    %% therefore: out_neighbours(V) == [V] and member(V, in_neighbours(V)).
-    %% Finally, only vertices with at least 2 elements are of interest.
-    %% With such vertices, the condition can be simplified to
-    %% 1 == out_degree(V), as an optimisation.
+select_iccs(G) ->
     [V || [_,_|_] = V <- digraph:vertices(G),
         1 =:= digraph:out_degree(G, V),
-          assert_independence(G, V)].
+        assert_independence(G, V)].
 
 -ifdef(NOASSERT).
 assert_independence(_, _) -> true.
