@@ -1671,7 +1671,10 @@ sup(Values) when is_list(Values) ->
 
 propagate_new(Tab, _Opts) ->
     %% These functions work on previous types of values.
-    T1 = remove_selfrec(purity, add_predefined(add_bifs(Tab))),
+    %% Leave removal of self-recursive dependencies to the end of the
+    %% preprocessing stage in order to exploit any information when
+    %% unfolding HOFs.
+    T1 = add_predefined(add_bifs(Tab)),
     T2 = dict_vmap(fun convert_value/1, T1),
 
     S0 = #s{tab = T2,
@@ -1908,12 +1911,17 @@ unfold_hofs_dep_loop(F, [R|Rs], #s{tab = T} = S0) ->
             {Which, IndirectPositions} = indirect_args(F, Df, Dr),
             S2 = extend_deplist_with_args(R, IndirectPositions, S1),
 
+            %% Distinguish visited nodes by deplist value as well, so that
+            %% we can continue in case of self-recursion, as long as new
+            %% indirect arguments are added.
+            %NDL = lookup_deplist(R, S2#s.tab),
+            NDL = IndirectPositions,
             case Which of
                 all ->
                     [] = PassedFunctions,% assert
-                    case visited({F, R}, S0) of
+                    case visited({F, R, NDL}, S0) of
                         true -> S2;
-                        false -> set_visited({F, R}, extend_workset(R, S2))
+                        false -> set_visited({F, R, NDL}, extend_workset(R, S2))
                     end;
                 maybe_some ->
                     set_unknown(R, S2)
@@ -1970,10 +1978,9 @@ reset_visited(#s{} = S) ->
 
 concrete_calls(F, Df, Dr, T) ->
     Positions = ordsets:from_list([N || {arg, N} <- Df]),
-    lists:foldl(
-        fun collect_results/2,
-        {all, []},
+    collect_results(
         [find_calls(Positions, Args, T) || {_, D, Args} <- Dr, D == F]).
+
 
 find_calls(Positions, Args, T) ->
     Fs = [Fun || {N, Fun} <- Args,
@@ -1988,21 +1995,21 @@ find_calls(Positions, Args, T) ->
 
 indirect_args(F, Df, Dr) ->
     Positions = ordsets:from_list([N || {arg, N} <- Df]),
-    lists:foldl(
-        fun collect_results/2,
-        {all, []},
+    collect_results(
         [find_indirect(Positions, Args) || {_, D, Args} <- Dr, D == F]).
-
 
 find_indirect(Positions, Args) ->
     {Fs, Ts} = lists:unzip([FromTo || {arg, {_From, To} = FromTo} <- Args,
                             ordsets:is_element(To, Positions)]),
     case ordsets:from_list(Ts) of
-        Positions -> {all, lists:usort(Fs)};
-        _ -> {maybe_some, lists:usort(Fs)}
+        Positions -> {all, Fs};
+        _ -> {maybe_some, Fs}
     end.
 
 
+collect_results(Results) ->
+    {Which, Values} = lists:foldl(fun collect_results/2, {all, []}, Results),
+    {Which, lists:usort(Values)}.
 
 collect_results({all, R1}, {all, R2}) ->
     {all, R1 ++ R2};
@@ -2017,12 +2024,22 @@ strip_arg_deps(#s{tab = T0} = S) ->
     {T1, Diff} = dict_mapfold(fun stripper/3, dict:new(), T0),
     S#s{tab = T1, diff = Diff}.
 
-%% Generate a new deplist with arguments and self-references stripped,
-%% but also keep track of these values in order to restore them later.
+%% @doc Generate a new deplist with arguments and self-references stripped.
+%% Keep track of stripped arguments in order to restore them later to
+%% mark HOFs.
+%%
+%% It is important to remove self-dependencies here and not at the beginning
+%% of propagation for 3 reasons:
+%% - HOF unfolding may add self-dependencies passed as concrete arguments,
+%%   so they will have to be removed again anyway.
+%% - HOF unfolding is better at marking a function as unknown than keeping
+%%   a mysterious self-rec as unresolved dependency. Furthermore, such
+%%   dependencies can help indirect HOF analysis (see test/nested) and
+%%   it is necessary for them to be all present for optimal results.
 stripper(F, {P, D0}, Diff) ->
-    D1 = [D || D <- D0, not is_arg(D), not is_rec(F, D)],
-    %% Store non-empty diffs only.
-    case ordsets:subtract(D0, D1) of
+    Rs = [D || D <- D0, not is_rec(F, D)],
+    D1 = [D || D <- Rs, not is_arg(D)],
+    case ordsets:subtract(Rs, D1) of
         [] -> { {P, D1}, Diff };
         Df -> { {P, D1}, dict:store(F, Df, Diff) }
     end.

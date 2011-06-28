@@ -99,7 +99,7 @@ main() ->
             Requested = sets:from_list(Modules),
             Print("Results:~n", []),
             lists:foreach(fun(A) -> pretty_print(Print, A) end, lists:sort(
-                    [V || {{M,_,_}=MFA, _} = V <- dict:to_list(purity:convert(Final, Options)),
+                    [V || {{M,_,_}=MFA, _} = V <- dict:to_list(Final),
                         sets:is_element(M, Requested),
                         not purity_utils:internal_function(MFA)]));
         true ->
@@ -293,14 +293,32 @@ fmt(undefined) ->
 fmt(Ctx) when is_list(Ctx) ->
     str("~w", [purity_utils:remove_args(Ctx)]);
 
-fmt({P, []}) -> fmt(P);
-fmt({{at_least,_}=P,_}) -> fmt(P);
-fmt({P, D}) when is_atom(P), is_list(D) -> fmt({at_least, P});
-
+fmt({P, []}) ->
+    fmt(P);
+fmt({P, D}) when is_list(D) ->
+    str("~s ~w", [fmt(P), fmt_deps(D)]);
 fmt({at_least, P}) ->
     str(">= ~s", [P]);
 fmt(P) when is_atom(P) ->
     atom_to_list(P).
+
+fmt_deps(Ds) ->
+    [fmt_dep(D) || D <- Ds].
+
+fmt_dep({arg,N}) ->
+    N;
+fmt_dep({Type, Fun, Args}) ->
+    {Type, Fun, [A || A <- Args, not is_removable(A)]};
+fmt_dep({free, {F, Args}}) ->
+    case [A || A <- Args, not is_removable(A)] of
+        [] -> {free, F};
+        As -> {free, {F, As}}
+    end.
+
+is_removable({arg, {_, _}}) -> true;
+is_removable({sub, _}) -> true;
+is_removable(_) -> false.
+
 
 
 %% @doc Execute Fun and print elapsed time.

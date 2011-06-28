@@ -3,7 +3,7 @@
 
 %< global [{test,with_reasons},with_reasons]
 
-%< foo/0 {false,"call to impure 'receive' expression"}
+%< foo/0 s
 %< [termination] foo/0 {false,"call to impure 'receive' expression"}
 foo() ->
     receive
@@ -11,19 +11,18 @@ foo() ->
             {ok, Msg}
     end.
 
-%< bar/0 true
-%< [{purelevel,2}] bar/0 {false,"call to impure 'catch' expression"}
+%< bar/0 d
 bar() ->
     catch (baz()).
 
-%< baz/0 true
+%< baz/0 p
 baz() ->
     42.
 
 
 %% Older versions of the code did not traverse after expressions.
 %% This was masked by the impure dependency on receive anyway.
-%< coverage/0 {false,"call to impure 'receive' expression, erlang:erase/1, erlang:put/2"}
+%< coverage/0 s
 %< [termination] coverage/0 {false,"call to impure 'receive' expression"}
 coverage() ->
     receive

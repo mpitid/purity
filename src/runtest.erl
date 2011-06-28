@@ -27,7 +27,8 @@
 -export([dump_term/2]).
 
 -export([filter_module/1, filter_reasons/1, filter_nested/1,
-        filter_args/1, filter_binaries/1, filter_pretty/1]).
+        filter_args/1, filter_binaries/1, filter_pretty/1,
+        filter_simplify_args/1]).
 
 -import(purity_utils, [str/2, internal_function/1]).
 
@@ -67,7 +68,6 @@ run_analysis(File, Popts, Topts) ->
         true -> Tab;
         false -> purity:propagate(Tab, Popts) end.
 
-
 parse_test_file(Filename) ->
     {Opts, Vals} = read_term(Filename),
     {Opts, Vals}.
@@ -95,6 +95,7 @@ standard_filters() ->
     ,{unless, with_nested, filter_nested}
     ,{unless, with_reasons, filter_reasons}
     ,{unless, with_args, filter_args}
+    ,{unless, with_arg_tuples, filter_simplify_args}
     ,filter_binaries
     ].
 
@@ -131,6 +132,7 @@ filter_args(Tab) ->
     [{K, filter_args1(V)} || {K, V} <- Tab].
 
 filter_args1(C) when is_list(C) -> [filter_args2(D) || D <- C];
+filter_args1({P, C}) when P =/= false, is_list(C) -> {P, [filter_args2(D) || D <- C]};
 filter_args1(Val) -> Val.
 
 filter_args2({Type,Fun,Args}) when is_list(Args) ->
@@ -186,6 +188,21 @@ format_val(false) -> "impure";
 format_val({false,Rsn}) -> str("impure(~s)",[Rsn]);
 format_val(C) when is_list(C) -> str("~w",[C]);
 format_val(V) -> str("~p",[V]).
+
+
+filter_simplify_args(Tab) ->
+    % Convert {arg,N} tuples to N for proper comparison with test results.
+    [{K, simplify_args(V)} || {K, V} <- Tab].
+
+simplify_args({P, Ds}) when P =/= false ->
+    {P, [simplify_arg(D) || D <- Ds]};
+simplify_args(V) ->
+    V. % Old style results
+
+simplify_arg({arg,N}) ->
+    N;
+simplify_arg(D) ->
+    D.
 
 
 %%% Other Helpers %%%
