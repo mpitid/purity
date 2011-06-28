@@ -1902,13 +1902,14 @@ unfold_hofs_dep_loop(F, [R|Rs], #s{tab = T} = S0) ->
     Dr = lookup_deplist(R, T),
     Sn =
       case concrete_calls(F, Df, Dr, T) of
-        {all, PassedFunctions} ->
+        {{all, PassedFunctions}, _} ->
             extend_deplist_with_funs(R, PassedFunctions, S0);
 
-        {maybe_some, PassedFunctions} ->
+        {{maybe_some, PassedFunctions}, RestOfDr} ->
             S1 = extend_deplist_with_funs(R, PassedFunctions, S0),
 
-            {Which, IndirectPositions} = indirect_args(F, Df, Dr),
+            {Which, IndirectPositions} = indirect_args(F, Df, RestOfDr),
+
             S2 = extend_deplist_with_args(R, IndirectPositions, S1),
 
             %% Distinguish visited nodes by deplist value as well, so that
@@ -1918,7 +1919,6 @@ unfold_hofs_dep_loop(F, [R|Rs], #s{tab = T} = S0) ->
             NDL = IndirectPositions,
             case Which of
                 all ->
-                    [] = PassedFunctions,% assert
                     case visited({F, R, NDL}, S0) of
                         true -> S2;
                         false -> set_visited({F, R, NDL}, extend_workset(R, S2))
@@ -1978,15 +1978,25 @@ reset_visited(#s{} = S) ->
 
 concrete_calls(F, Df, Dr, T) ->
     Positions = ordsets:from_list([N || {arg, N} <- Df]),
-    collect_results(
-        [find_calls(Positions, Args, T) || {_, D, Args} <- Dr, D == F]).
-
+    Candidates = [Args || {_, D, Args} <- Dr, D =:= F],
+    Results = [find_calls(Positions, Args, T) || Args <- Candidates],
+    ToPurge = ordsets:from_list(
+        [Args || {{all, _}, Args} <- lists:zip(Results, Candidates)]),
+    %% Remove any of the dependencies which pass concrete arguments.
+    RestOfDr = lists:filter(
+        fun ({_, D, Args}) ->
+                not (D =:= F andalso ordsets:is_element(Args, ToPurge));
+            (_) -> true end,
+        Dr),
+    {collect_results(Results), RestOfDr}.
 
 find_calls(Positions, Args, T) ->
     Fs = [Fun || {N, Fun} <- Args,
           purity_utils:is_concrete_fun(Fun),
           ordsets:is_element(N, Positions)],
     Pred = fun(F) -> {_, D} = dict_fetch(F, T, {p, []}), is_hof(D) end,
+    %% HOFs could be included in the count in case of higher order
+    %% recursion, like in asn1ct_check:constraint_union_vr/2.
     {_, NotHOFs} = lists:partition(Pred, Fs), % XXX
     case length(NotHOFs) == length(Positions) of
         true  -> {all, Fs};

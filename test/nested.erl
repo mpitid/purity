@@ -127,13 +127,9 @@ m(F, G, X, Y, [H|T]) when is_list(H) ->
 m(F, _, _, _, E) ->
     F(E).
 
-%% This is an example of a function which does not get resolved
-%% with the change in self-rec removal, although it previously was.
-%% The reason is because not all recursive calls are resolved to
-%% either concrete values, or indirect args. It should be possible
-%% to combine detection of the two however.
+%% (HOF recursion can be handled the same way as indirect functions).
 %% For a real life example look at dets_utils:leafs_to_nodes/4.
-%< n/2 >= e [1]
+%< n/2 e [1]
 n(H, [V|_]) ->
     n(H, V);
 n(H, V) ->
