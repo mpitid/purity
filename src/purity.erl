@@ -1979,7 +1979,7 @@ reset_visited(#s{} = S) ->
 concrete_calls(F, Df, Dr, T) ->
     Positions = ordsets:from_list([N || {arg, N} <- Df]),
     Candidates = [Args || {_, D, Args} <- Dr, D =:= F],
-    Results = [find_calls(Positions, Args, T) || Args <- Candidates],
+    Results = [find_calls(F, Positions, Args, T) || Args <- Candidates],
     ToPurge = ordsets:from_list(
         [Args || {{all, _}, Args} <- lists:zip(Results, Candidates)]),
     %% Remove any of the dependencies which pass concrete arguments.
@@ -1990,14 +1990,19 @@ concrete_calls(F, Df, Dr, T) ->
         Dr),
     {collect_results(Results), RestOfDr}.
 
-find_calls(Positions, Args, T) ->
+find_calls(H, Positions, Args, T) ->
     Fs = [Fun || {N, Fun} <- Args,
           purity_utils:is_concrete_fun(Fun),
           ordsets:is_element(N, Positions)],
-    Pred = fun(F) -> {_, D} = dict_fetch(F, T, {p, []}), is_hof(D) end,
-    %% HOFs could be included in the count in case of higher order
-    %% recursion, like in asn1ct_check:constraint_union_vr/2.
-    {_, NotHOFs} = lists:partition(Pred, Fs), % XXX
+    %% Passing HOFs as a concrete argument does not count, although
+    %% the HOF is added to the returned list, so that is pureness value
+    %% is propagated to the caller. There is one exception however, when
+    %% the concrete HOF passed is the same as the HOF it is passed to,
+    %% e.g. for performing recursion with an anonymous function.
+    Pred = fun(F) ->
+            {_, D} = dict_fetch(F, T, {p, []}),
+            H =/= F andalso is_hof(D) end,
+    {_, NotHOFs} = lists:partition(Pred, Fs),
     case length(NotHOFs) == length(Positions) of
         true  -> {all, Fs};
         false -> {maybe_some, Fs}

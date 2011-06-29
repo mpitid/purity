@@ -136,3 +136,29 @@ n(H, V) ->
     n(fun abs/1, V),
     H(V).
 
+%% Passing another HOF as a concrete argument to a HOF.
+%% In general cases like this are marked as unknown, with one exception:
+%% when the passed argument is the same as the HOF it is passed to, e.g.
+%% to implement recursion in anonymous higher order functions.
+%< o/2 >= e
+o(L, A) ->
+    H = fun(F) -> F(A) end,
+    omap(H, L).
+
+%< omap/2 e [1]
+omap(_, []) -> [];
+omap(F, [H|T]) -> [F(H)|omap(F, T)].
+
+%% The exception: passing the same HOF. This is inspired from
+%% asn1ct_check:constraint_union_vr/2 (can't see why lists:usort/2
+%% was not used there instead though).
+%< p/1 e
+%< 'p_1-1'/2 e [2]
+p(L) ->
+    RemDup =
+    fun ([], _) -> [];
+        ([H], _) -> [H];
+        ([H,H|T], F) -> F([H|T], F);
+        ([H|T], F) -> [H|F(T, F)] end,
+    RemDup(L, RemDup).
+
