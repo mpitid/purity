@@ -1719,6 +1719,9 @@ contaminate(#s{ws = W} = S) ->
     Fs = lists:usort(lists:flatten(W)),
     contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, Fs)).
 
+%% Note that reverse dependency lists still contain self references,
+%% but the performance impact of analysing them as well is marginal.
+%% If necessary they can easily be removed right after pre-processing.
 contaminate(E, #s{tab = T} = S) ->
     Dependent = [F || F <- reverse_deplist(E, S), not visited(F, S)],
     set_visited(E, contaminate({E, lookup_purity(E, T)}, Dependent, S)).
@@ -2208,8 +2211,6 @@ convert(Tab, Opts) ->
 %% values, since there can be only two states, terminating (pure) or
 %% non-terminating (equivalent to the maximal value of `side-effect').
 
-%% TODO:
-%% - Re-implement self-rec removal.
 propagate_termination_new(Tab, _Opts) ->
     T1 = merge(add_bifs(Tab), dict:from_list(?PREDEF)),
     T2 = dict_vmap(fun convert_termination_value/1, T1),
@@ -2266,25 +2267,36 @@ preprocess_termination(#s{tab = T} = S) ->
                     S#s{ ws = initial_pre_workset(T) })))).
 
 
-%% @doc Mark any recursive functions as non-terminating.
-%% Prior to that, remove self-references from the dependency lists,
-%% as long as the recursive calls converge by passing continually
-%% "smaller" versions of some argument.
-mark_recursive(#s{tab = T0} = S) ->
-    T1 = dict:map(
-        fun (F, {_, D} = V) ->
-                case is_recursive(F, D) of
-                    true -> {s, []};
-                    false -> V end
-        end,
-        remove_selfrec_new(T0)),
-    S#s{tab = T1}.
+%% @doc Mark any recursive functions as non-terminating, with the
+%% exception of those recursive functions which pass "reduced" versions
+%% of their arguments to all recursive calls. These calls are guaranteed
+%% to either terminate or crash.
+mark_recursive(#s{tab = T} = S) ->
+    S#s{tab = dict:map(fun mark_recursive/2, T)}.
 
-is_recursive(F, D) ->
-    lists:any(fun(E) -> is_rec(F, E) end, D).
+mark_recursive(F, {_, D} = V) ->
+    case should_mark_recursive(F, D) of
+        true  -> {s, []};
+        false -> V
+    end.
 
-remove_selfrec_new(T) ->
-    dict:map(fun (F, {P, V}) -> {P, remove_selfrec_t(F, V)} end, T).
+should_mark_recursive(F, D) ->
+    %% The function should be marked if:
+    As = [A || {_T, Fun, A} <- D, F =:= Fun],
+    %% it has recursive dependencies
+    [] =/= As andalso
+    %% and it does not pass reduced arguments to all of them.
+    [] =:= intersection([reduced_arguments(A) || A <- As]).
+
+reduced_arguments(Args) ->
+    %% No need to usort, args should already be an ordset.
+    [N || {sub, N} <- Args].
+
+%% @doc Return the intersection of a list of ordered sets.
+intersection([]) ->
+    [];
+intersection([S|Sets]) ->
+    lists:foldl(fun ordsets:intersection/2, S, Sets).
 
 
 %% @doc Update a list of keys with the same value in a dictionary.
