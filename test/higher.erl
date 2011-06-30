@@ -99,7 +99,7 @@ l(_, _, []) ->
 
 %% Example of an unresolvable unknown function (an element of the list).
 %< m/2 >= e [1]
-%< [termination] m/2 s
+%< [termination] m/2 >= p [1]
 m(F, [G,E|T]) ->
     [F(E)|m(G, T)];
 m(_, []) ->
