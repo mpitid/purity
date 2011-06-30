@@ -1716,7 +1716,8 @@ converge_contaminate(#s{tab = T} = S0) ->
 contaminate(#s{ws = []} = S) ->
     S;
 contaminate(#s{ws = W} = S) ->
-    contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, W)).
+    Fs = lists:usort(lists:flatten(W)),
+    contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, Fs)).
 
 contaminate(E, #s{tab = T} = S) ->
     Dependent = [F || F <- reverse_deplist(E, S), not visited(F, S)],
@@ -1725,17 +1726,16 @@ contaminate(E, #s{tab = T} = S) ->
 contaminate(_, [], S) ->
     S;
 contaminate({_, s}, Fs, #s{tab = T, ws = W} = S) ->
-    S#s{ws = lists:foldl(fun ordsets:add_element/2, W, Fs),
-        tab = lists:foldl(fun (F, Tn) -> dict:store(F, {s, []}, Tn) end, T, Fs)};
-contaminate({E, Pe} = EP, [F|Fs], #s{tab = T} = S0) ->
+    S#s{tab = dict_store(Fs, {s, []}, T), ws = [Fs|W]};
+contaminate({E, Pe} = EP, [F|Fs], #s{tab = T, ws = W} = S0) ->
     {Pf, Df} = lookup(F, T),
     S1 =
       case { sup(Pe, Pf), remove_dep(E, Df) } of
-        {P, []} ->
-            %% Fully-resolved function, strip dependency list.
-            update_tab(F, P, [], extend_workset(F, S0));
-        {P, D} ->
-            update_tab(F, P, D, S0)
+        {_, []} = P ->
+            %% Fully-resolved function, add to workset.
+            S0#s{tab = dict:store(F, P, T), ws = [F|W]};
+        P ->
+            S0#s{tab = dict:store(F, P, T)}
       end,
     contaminate(EP, Fs, S1).
 
@@ -1753,9 +1753,6 @@ set_visited(F, #s{cs = C} = S) ->
 
 extend_workset(F, #s{ws = W} = S) ->
     S#s{ws = ordsets:add_element(F, W)}.
-
-update_tab(Function, Purity, DepList, #s{tab = T} = S) ->
-    S#s{tab = dict:store(Function, {Purity, DepList}, T)}.
 
 lookup(Function, Table) ->
     dict:fetch(Function, Table).
