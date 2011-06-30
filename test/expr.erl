@@ -4,7 +4,7 @@
 %< global [{test,with_reasons},with_reasons]
 
 %< foo/0 s
-%< [termination] foo/0 {false,"call to impure 'receive' expression"}
+%< [termination] foo/0 s
 foo() ->
     receive
         Msg ->
@@ -12,6 +12,7 @@ foo() ->
     end.
 
 %< bar/0 d
+%< [termination] bar/0 p
 bar() ->
     catch (baz()).
 
@@ -23,7 +24,7 @@ baz() ->
 %% Older versions of the code did not traverse after expressions.
 %% This was masked by the impure dependency on receive anyway.
 %< coverage/0 s
-%< [termination] coverage/0 {false,"call to impure 'receive' expression"}
+%< [termination] coverage/0 s
 coverage() ->
     receive
         Msg ->

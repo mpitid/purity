@@ -1006,7 +1006,8 @@ propagate(Tab, Opts) ->
         false ->
             case option(termination, Opts) of
                 true ->
-                    propagate_termination(Tab, Opts);
+                    %propagate_termination(Tab, Opts);
+                    propagate_termination_new(Tab, Opts);
                 false ->
                     %propagate_purity(Tab, Opts)
                     propagate_new(Tab, Opts)
@@ -1715,26 +1716,31 @@ converge_contaminate(#s{tab = T} = S0) ->
 contaminate(#s{ws = []} = S) ->
     S;
 contaminate(#s{ws = W} = S) ->
-    contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, W)).
+    Fs = lists:usort(lists:flatten(W)),
+    contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, Fs)).
 
-contaminate(E, #s{} = S) ->
+%% Note that reverse dependency lists still contain self references,
+%% but the performance impact of analysing them as well is marginal.
+%% If necessary they can easily be removed right after pre-processing.
+contaminate(E, #s{tab = T} = S) ->
     Dependent = [F || F <- reverse_deplist(E, S), not visited(F, S)],
-    set_visited(E, contaminate(E, Dependent, S)).
+    set_visited(E, contaminate({E, lookup_purity(E, T)}, Dependent, S)).
 
 contaminate(_, [], S) ->
     S;
-contaminate(E, [F|Fs], #s{tab = T} = S0) ->
-    {Pe,_De} = lookup(E, T),
+contaminate({_, s}, Fs, #s{tab = T, ws = W} = S) ->
+    S#s{tab = dict_store(Fs, {s, []}, T), ws = [Fs|W]};
+contaminate({E, Pe} = EP, [F|Fs], #s{tab = T, ws = W} = S0) ->
     {Pf, Df} = lookup(F, T),
     S1 =
       case { sup(Pe, Pf), remove_dep(E, Df) } of
-        {P, D} when P =:= s orelse D =:= [] ->
-            %% Fully-resolved function, strip dependency list.
-            update_tab(F, P, [], extend_workset(F, S0));
-        {P, D} ->
-            update_tab(F, P, D, S0)
+        {_, []} = P ->
+            %% Fully-resolved function, add to workset.
+            S0#s{tab = dict:store(F, P, T), ws = [F|W]};
+        P ->
+            S0#s{tab = dict:store(F, P, T)}
       end,
-    contaminate(E, Fs, S1).
+    contaminate(EP, Fs, S1).
 
 
 %%% State record helpers.
@@ -1750,9 +1756,6 @@ set_visited(F, #s{cs = C} = S) ->
 
 extend_workset(F, #s{ws = W} = S) ->
     S#s{ws = ordsets:add_element(F, W)}.
-
-update_tab(Function, Purity, DepList, #s{tab = T} = S) ->
-    S#s{tab = dict:store(Function, {Purity, DepList}, T)}.
 
 lookup(Function, Table) ->
     dict:fetch(Function, Table).
@@ -1781,7 +1784,6 @@ remove_dep(F, DepList) ->
 
 %%% Analysis of mutually recursive functions.
 
-%% FIXME: Naming of functions.
 resolve_independent_sccs(#s{tab = T, ws = []} = S) ->
     ICCs = with_graph(build_call_graph(T), fun locate_iccs/1),
     S#s{tab = lists:foldl(fun set_mutual_purity/2, T, ICCs),
@@ -2201,4 +2203,103 @@ convert(Tab, Opts) ->
            (_, {P, []}) -> dict:fetch(P, Map);
            (_, {P, D}) -> [P|D] end,
         Tab).
+
+
+%%% Termination analysis with the new algorithm. %%%
+%% Re-use as much as possible from the purity propagation algorithm.
+%% For instance, termination values are the subset {p, s} of purity
+%% values, since there can be only two states, terminating (pure) or
+%% non-terminating (equivalent to the maximal value of `side-effect').
+
+propagate_termination_new(Tab, _Opts) ->
+    T1 = merge(add_bifs(Tab), dict:from_list(?PREDEF)),
+    T2 = dict_vmap(fun convert_termination_value/1, T1),
+    T3 = dict:store({erl, {'receive', infinite}}, {s, []}, T2),
+
+    S0 = #s{tab = T3,
+            rev = purity_utils:rev_deps(T1)},
+
+    S1 = preprocess_termination(S0),
+    T4 = converge_contaminate_termination(S1#s{ ws = initial_workset(S1#s.tab) }),
+    S2 = postprocess(S1#s{tab = T4}),
+
+    S2#s.tab.
+
+
+%% These correspond to BIFs. All BIFs are considered terminating.
+convert_termination_value([side_effects]) ->
+    {p, []};
+convert_termination_value([exceptions]) ->
+    {p, []};
+convert_termination_value([non_determinism]) ->
+    {p, []};
+%% Everything else is handled the same way as purity values.
+convert_termination_value(V) ->
+    convert_value(V).
+
+
+converge_contaminate_termination(#s{tab = T} = S0) ->
+    case mark_sccs(contaminate(S0)) of
+        #s{tab = T} -> T;
+        S1 -> converge_contaminate_termination(S1)
+    end.
+
+%% @doc When it comes to termination analysis this step overlaps with
+%% the contamination algorithm, and is not strictly necessary.
+%% Furthermore, it can be used before contamination, as was the case
+%% with the old termination analysis, to produce more starting values.
+%% However, building the call graph for sufficiently large data sets
+%% (e.g. the whole of OTP) is prohibitively slow. Instead, run it after
+%% an initial contamination run, to mark values as definitely impure,
+%% instead of unresolved which is how contamination leaves them.
+mark_sccs(#s{tab = T, ws = []} = S) ->
+    CSCs = with_graph(build_call_graph(T),
+                     fun digraph_utils:cyclic_strong_components/1),
+    W = workset(lists:flatten(CSCs)),
+    S#s{tab = dict_store(W, {s, []}, T), ws = W}.
+
+
+preprocess_termination(#s{tab = T} = S) ->
+    reset_visited(
+        strip_arg_deps(
+            mark_recursive(
+                unfold_hofs(
+                    S#s{ ws = initial_pre_workset(T) })))).
+
+
+%% @doc Mark any recursive functions as non-terminating, with the
+%% exception of those recursive functions which pass "reduced" versions
+%% of their arguments to all recursive calls. These calls are guaranteed
+%% to either terminate or crash.
+mark_recursive(#s{tab = T} = S) ->
+    S#s{tab = dict:map(fun mark_recursive/2, T)}.
+
+mark_recursive(F, {_, D} = V) ->
+    case should_mark_recursive(F, D) of
+        true  -> {s, []};
+        false -> V
+    end.
+
+should_mark_recursive(F, D) ->
+    %% The function should be marked if:
+    As = [A || {_T, Fun, A} <- D, F =:= Fun],
+    %% it has recursive dependencies
+    [] =/= As andalso
+    %% and it does not pass reduced arguments to all of them.
+    [] =:= intersection([reduced_arguments(A) || A <- As]).
+
+reduced_arguments(Args) ->
+    %% No need to usort, args should already be an ordset.
+    [N || {sub, N} <- Args].
+
+%% @doc Return the intersection of a list of ordered sets.
+intersection([]) ->
+    [];
+intersection([S|Sets]) ->
+    lists:foldl(fun ordsets:intersection/2, S, Sets).
+
+
+%% @doc Update a list of keys with the same value in a dictionary.
+dict_store(Keys, Value, Dict) ->
+    lists:foldl(fun (K, D) -> dict:store(K, Value, D) end, Dict, Keys).
 
