@@ -1718,14 +1718,13 @@ contaminate(#s{ws = []} = S) ->
 contaminate(#s{ws = W} = S) ->
     contaminate(lists:foldl(fun contaminate/2, S#s{ws = []}, W)).
 
-contaminate(E, #s{} = S) ->
+contaminate(E, #s{tab = T} = S) ->
     Dependent = [F || F <- reverse_deplist(E, S), not visited(F, S)],
-    set_visited(E, contaminate(E, Dependent, S)).
+    set_visited(E, contaminate({E, lookup_purity(E, T)}, Dependent, S)).
 
 contaminate(_, [], S) ->
     S;
-contaminate(E, [F|Fs], #s{tab = T} = S0) ->
-    {Pe,_De} = lookup(E, T),
+contaminate({E, Pe} = EP, [F|Fs], #s{tab = T} = S0) ->
     {Pf, Df} = lookup(F, T),
     S1 =
       case { sup(Pe, Pf), remove_dep(E, Df) } of
@@ -1735,7 +1734,7 @@ contaminate(E, [F|Fs], #s{tab = T} = S0) ->
         {P, D} ->
             update_tab(F, P, D, S0)
       end,
-    contaminate(E, Fs, S1).
+    contaminate(EP, Fs, S1).
 
 
 %%% State record helpers.
