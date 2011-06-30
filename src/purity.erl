@@ -29,13 +29,13 @@
 -export([pmodules/3, panalyse/2]).
 -export([is_pure/2]).
 -export([propagate/2, propagate_termination/2, propagate_purity/2,
-         propagate_both/2, find_missing/1]).
+         find_missing/1]).
 -export([analyse_changed/3]).
 
--export([propagate_new/2, purity_of/2, convert/2]).
+-export([purity_of/2, convert/2]).
 
--import(purity_utils, [fmt_mfa/1, str/2]).
--import(purity_utils, [remove_args/1, dict_cons/3, filename_to_module/1]).
+-import(purity_utils, [str/2]).
+-import(purity_utils, [dict_cons/3, filename_to_module/1]).
 
 -export_type([pure/0]).
 
@@ -172,15 +172,6 @@ load_plt_silent(Opts) ->
                 table   = dict:new() :: dict()}).
 
 -type state() :: #state{}.
-
-
-%% State record for propagation of dependency lists to pureness values.
--record(pst, {funs = []         :: [mfa()],
-              prev = sets:new() :: set(),
-              revs              :: dict(),
-              rsns = false      :: boolean(),
-              cycles            :: dict(),
-              table             :: dict()}).
 
 
 %% @doc Return a list of MFAs and a list of primops for which we have no
@@ -1006,224 +997,13 @@ propagate(Tab, Opts) ->
         false ->
             case option(termination, Opts) of
                 true ->
-                    %propagate_termination(Tab, Opts);
-                    propagate_termination_new(Tab, Opts);
+                    propagate_termination(Tab, Opts);
                 false ->
-                    %propagate_purity(Tab, Opts)
-                    propagate_new(Tab, Opts)
+                    propagate_purity(Tab, Opts)
             end
     end.
 
 
-%% @doc Combine the propagation into one function, which is
-%% significantly faster. First perform an impure purity propagation,
-%% and then run the termination analysis.
--spec propagate_both(dict(), purity_utils:options()) -> dict().
-
-propagate_both(Tab0, Opts) ->
-    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF)),
-    Vs =
-        case option(purelevel, Opts, 1) of
-          1 -> [false, true, true];
-          2 -> [false, false, true];
-          3 -> [false, false, false]
-      end,
-    %% Note that 'receive' will be covered by side_effects.
-    KVs = lists:zip([side_effects, non_determinism, exceptions], Vs),
-    Tab2 = update(Tab1, KVs),
-    St0 = #pst{funs = collect_impure(Tab2),
-               revs = purity_utils:rev_deps(Tab2),
-               rsns = option(with_reasons, Opts),
-               table = Tab2},
-    St1 = propagate_impure(St0),
-    Tab3 = remove_selfrec(termination, St1#pst.table),
-    Funs = recursive_functions(Tab3),
-    Tab4 = update(Tab3, Funs, false),
-    converge_pst(fun propagate_termination_loop/1,
-                 St1#pst{funs = Funs, table = Tab4}).
-
-collect_impure(Tab) ->
-    dict:fold(fun collect_impure/3, [], Tab).
-
-collect_impure(F, V, A) ->
-    case impure_val(V) of
-        true -> [F|A];
-        false -> A
-    end.
-
-
-%% @doc Crude and very conservative termination analysis.
-%%
-%% A function is considered non-terminating if it calls itself,
-%% has a receive statement with a potentially infinite timeout, or
-%% depends on another function which is non-terminating. Certain
-%% cases of functions which consume one of their arguments are
-%% also detected and considered terminating.
-
--spec propagate_termination(dict(), purity_utils:options()) -> dict().
-
-propagate_termination(Tab0, Opts) ->
-    %% All BIFs are considered terminating, but we have to keep track
-    %% of higher order BIFs too.
-    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF)),
-    KeyVals = [
-        {side_effects, true}, {non_determinism, true}, {exceptions, true},
-        {{erl, {'receive', infinite}}, false}],
-    Tab2 = remove_selfrec(termination, merge(Tab1, dict:from_list(KeyVals))),
-    Funs = recursive_functions(Tab2),
-    Tab3 = update(Tab2, Funs, {false, <<"recursion">>}),
-    converge_pst(fun propagate_termination_loop/1,
-                 #pst{funs = Funs, table = Tab3,
-                      rsns = option(with_reasons, Opts),
-                      revs = purity_utils:rev_deps(Tab3)}).
-
-propagate_termination_loop(#pst{table = Tab0} = St0) ->
-    {Pure, Impure} = collect_concrete(Tab0),
-    St1 = propagate_impure(St0#pst{funs = Impure}),
-    St2 = propagate_pure(St1#pst{funs = Pure}),
-    St3 = call_site_analysis(St2),
-    St4 = higher_analysis(St3),
-    St4.
-
-recursive_functions(Tab) ->
-    %% This could also be expanded with digraph_utils:reaching,
-    %% but there is no performance gain.
-    [F || C <- digraph_utils:cyclic_strong_components(dependency_graph(Tab)),
-          F <- C].
-
-%% @spec propagate_purity(dict(), purity_utils:options()) -> dict()
-%%
-%% @doc Return a version of the lookup table with dependencies
-%% converted to concrete results.
-%%
-%% The dependency lists returned by `module/3' are converted to concrete
-%% values whenever possible, depending on the particular set of options
-%% as well.
-%%
-%% @see module/3
-%% @see modules/3
-
--spec propagate_purity(dict(), purity_utils:options()) -> dict().
-
-propagate_purity(Tab0, Opts) ->
-    Vs =
-      case option(purelevel, Opts, 1) of
-          1 -> [false, true, true];
-          2 -> [false, false, true];
-          3 -> [false, false, false]
-      end,
-    KVs = lists:zip([side_effects, non_determinism, exceptions], Vs),
-    Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF ++ KVs)),
-    Tab2 = remove_selfrec(purity, Tab1),
-    converge_pst(fun propagate_loop/1,
-                 #pst{revs = purity_utils:rev_deps(Tab2),
-                      table = Tab2, rsns = option(with_reasons, Opts)}).
-
-%% Higher order analysis should replace call_site analysis completely
-%% at some point, but currently it is still useful for functions which
-%% take more than one function as argument, or have other dependencies
-%% as well.
-propagate_loop(#pst{table = Tab} = St0) ->
-    {Pure, Impure} = collect_concrete(Tab),
-    St1 = propagate_impure(St0#pst{funs = Impure}),
-    St2 = propagate_pure(St1#pst{funs = Pure}),
-    St3 = call_site_analysis(St2),
-    St4 = higher_analysis(St3),
-    St5 = mutual_analysis(St4),
-    St5.
-
-
-%%% Recursion Handling %%%
-
-remove_selfrec(purity, Tab) ->
-    dict:map(fun remove_selfrec_p/2, Tab);
-remove_selfrec(termination, Tab) ->
-    dict:map(fun remove_selfrec_t/2, Tab).
-
-%% Observing that only the purity of certain higher order functions
-%% may depend on recursive dependencies, remove them from all other
-%% cases to simplify the rest of purity analysis.
-remove_selfrec_p(F, C) when is_list(C) ->
-    Keep =
-      case is_hof(C) of
-          true ->
-              Exp = [N || {arg,N} <- C],
-              fun({_, D, Args}) when F =:= D ->
-                      passes_unknown_fun(Args, Exp);
-                 (_) -> true end;
-          false ->
-              fun(D) -> not selfrec(F, D) end
-      end,
-    [D || D <- C, Keep(D)];
-remove_selfrec_p(_, V) -> V.
-
-%% @doc Remove any self-recursive dependencies which consume one of
-%% their arguments.
-remove_selfrec_t(F, C) when is_list(C) ->
-    case is_hof(C) andalso prevent_removal(F, C) of
-        true ->
-            clear_sub(C);
-        false ->
-            remove_selfrec_with_subset(F, C)
-    end;
-remove_selfrec_t(_, V) -> V.
-
-remove_selfrec_with_subset(F, C) ->
-    RecArgs = [A || {_, D, A} <- C, D =:= F],
-    C1 =
-      case all_subsets(RecArgs) andalso no_high_callsite(RecArgs) of
-          true ->
-              [D || D <- C, not selfrec(F, D)];
-          false ->
-              C
-      end,
-    %% Subset information is no longer useful so remove it.
-    lists:usort(clear_sub(C1)).
-
-selfrec(F, {_, F, _}) ->
-    true;
-selfrec(_, _) ->
-    false.
-
-%% Prevent subset recursion removal for hofs which pass unknown
-%% functions to the recursive call.
-prevent_removal(F, C) ->
-    Exp = [N || {arg, N} <- C],
-    lists:any(
-        fun({_, D, Args}) when F =:= D ->
-                    passes_unknown_fun(Args, Exp);
-           (_) -> false end,
-        C).
-
-%% @doc Check if the arguments passed to a recursive call in a HOF
-%% HOF are not some permutation of the arguments expected as higher
-%% order functions, e.g.
-%% > a(F, G, A) -> G(F(A)),..., a(F, G, _). or a(G, F, _).
-%% In such cases the self-recursive dependency should be preserved (and
-%% make the function impure) since we cannot statically deduce its
-%% purity or termination.
-passes_unknown_fun(Args, Expecting) ->
-    ESet = ordsets:from_list(Expecting),
-    ASet = ordsets:from_list([N || {arg, {N, K}} <- Args,
-                                   ordsets:is_element(K, ESet)]),
-    ESet =/= ASet. %% Safe to compare ordsets directly.
-
-%% @doc Check whether all calls have at least one common subset as
-%% argument.
-all_subsets(Args) ->
-    case [ordsets:from_list([N || {sub, N} <- A]) || A <- Args] of
-        [] -> false;
-        [H|T] -> [] =/= lists:foldl(fun ordsets:intersection/2, H, T)
-    end.
-
-%% @doc Check whether there is no concrete call for recursive higher
-%% order functions.
-%% XXX What about checking for HOF first? Could it be an indirect HOF?
-no_high_callsite(Args) ->
-    not lists:any(fun concrete_arg/1, lists:flatten(Args)).
-
-concrete_arg({_N, {_M,_F,_A}}) -> true;
-concrete_arg(_) -> false.
 
 is_hof(C) ->
     lists:any(fun arg_dep/1, C).
@@ -1232,360 +1012,6 @@ arg_dep({arg, _}) ->
     true;
 arg_dep(_) ->
     false.
-
-clear_sub(C) ->
-    [clear_sub1(D) || D <- C].
-
-clear_sub1({T,F,Args}) when is_list(Args) ->
-    {T, F, [A || A <- Args, not sub(A)]};
-clear_sub1(D) ->
-    D.
-
-sub({sub,_}) ->
-    true;
-sub(_) ->
-    false.
-
-
-%%% Propagation Helpers %%%
-
-converge_pst(Fun, #pst{table = Tab} = St0) ->
-    case Fun(St0) of
-        #pst{table = Tab} ->
-            Tab;
-        St1 ->
-            converge_pst(Fun, St1)
-    end.
-
-%% @doc Return two lists of functions with concrete values, one for 
-%% pure and one for impure ones.
-collect_concrete(Tab) ->
-    dict:fold(fun collect_concrete/3, {[], []}, Tab).
-
-collect_concrete(F, true, {Pure, Impure}) ->
-    {[F|Pure], Impure};
-collect_concrete(F, [], {Pure, Impure}) ->
-    {[F|Pure], Impure};
-collect_concrete(F, {false, _}, {Pure, Impure}) ->
-    {Pure, [F|Impure]};
-collect_concrete(F, false, {Pure, Impure}) ->
-    {Pure, [F|Impure]};
-collect_concrete(_, _, Acc) ->
-    Acc.
-
-%% The set of previously visited functions is necessary in order
-%% to avoid endless loops caused by mutually recursive functions.
-propagate_pure(#pst{funs = []} = St) ->
-    St;
-propagate_pure(#pst{funs = Funs0, prev = Set0, table = Tab0} = St) ->
-    Tab1 = remove_from_ctx(Tab0, Funs0),
-    Set1 = add_elements(Funs0, Set0),
-    Deps = [D || F <- Funs0, D <- fetch_deps(F, St#pst.revs),
-                 not sets:is_element(D, Set1),
-                 pure_val(dict:fetch(D, Tab1))],
-    propagate_pure(St#pst{funs = lists:usort(Deps), prev = Set1, table = Tab1}).
-
-%% When propagating impure results, try to keep track of the reason
-%% each function is impure, i.e. the impure expressions it directly
-%% depends on. Some of these are lost because they are contained in
-%% the previously visited set.
-propagate_impure(#pst{funs = []} = St) ->
-    St;
-propagate_impure(#pst{funs = Funs0, table = Tab, prev = Set0} = St) ->
-    Deps = [{F, fetch_deps(F, St#pst.revs)} || F <- Funs0],
-    Set1 = add_elements(Funs0, Set0),
-    %% Using Set0 instead of Set1 here should not influence the final
-    %% outcome. However it would keep track of impure reasons in more
-    %% detail, but it would also be slower, since more iterations are
-    %% required.
-    Funs1 = lists:usort([D || {_F, Ds} <- Deps, D <- Ds,
-                              not sets:is_element(D, Set0)]),
-    propagate_impure(St#pst{funs = Funs1, prev = Set1,
-                            table = update_false(Tab, Funs1, Deps, St#pst.rsns)}).
-
-add_elements(Elements, Set) ->
-    lists:foldl(fun sets:add_element/2, Set, Elements).
-
-fetch_deps(Key, DepMap) ->
-    case dict:find(Key, DepMap) of
-        {ok, Deps} ->
-            Deps;
-        error ->
-            []
-    end.
-
-update_false(Tab, Funs, Deps, Reasons) ->
-    case Reasons of
-        false ->
-            update(Tab, Funs, false);
-        true ->
-            update(Tab, with_reasons(Deps))
-    end.
-
-%% @doc Convert a list of impure functions and their reverse dependencies
-%% to a list of those dependencies annotated with the reason they are impure.
-with_reasons(Vals) ->
-    %% Map each dep back to the list of functions it depends on, to form
-    %% the reason of impurity.
-    D = lists:foldl(fun map_reverse/2, dict:new(), Vals),
-    dict:fold(fun(F, Ds, A) -> [{F, {false, fmt(Ds)}} | A] end, [], D).
-
-map_reverse({F, Deps}, D0) ->
-    lists:foldl(fun(D, D1) -> dict_cons(D, F, D1) end, D0, Deps).
-
-fmt(Deps) ->
-    %% Keep a list of sorted, unique references.
-    Ds = [fmt_dep(D) || D <- lists:usort(Deps)],
-    Tl = list_to_binary(string:join(Ds, ", ")),
-    <<"call to impure ", Tl/binary>>.
-
-fmt_dep({erl, {'receive',_}}) ->
-    "'receive' expression";
-fmt_dep({erl, A}) ->
-    str("~p expression", [A]); % Preserve quotes.
-fmt_dep(side_effects) ->
-    "side-effects";
-fmt_dep(exceptions) ->
-    "exceptions";
-fmt_dep(non_determinism) ->
-    "non-determinism";
-fmt_dep(Other) ->
-    fmt_mfa(Other).
-
-
-%% @doc Remove `Funs' from any context dependencies in the `Table'.
-remove_from_ctx(Table, Funs) ->
-    Set = sets:from_list(Funs),
-    Pred = fun({_Type, MFA, _Args}) -> not sets:is_element(MFA, Set);
-              %% This covers special dependencies and expressions like
-              %% {erl,'catch'}. Other stuff like {arg,N} will not be
-              %% part of the set so they will remain.
-              (Other) -> not sets:is_element(Other, Set) end,
-    dict:map(
-        fun(_F, Ctx) when is_list(Ctx) -> ordsets:filter(Pred, Ctx);
-           (_F, Val) -> Val end,
-        Table).
-
-
-higher_analysis(#pst{table = Tab, revs = Rev} = St) ->
-    G = purity_hofs:make_arg_graph(Tab, Rev),
-    St#pst{table = dict:map(
-            fun(F, V) -> higher_analysis(F, V, Tab, G) end, Tab)}.
-
-higher_analysis(Fun, Val, Table, Graph) ->
-    %purity_hofs:to_dot(Graph, str("graphs/graph_~4..0b.dot", [purity_utils:count(hofs)])),
-    case purity_hofs:higher_analysis(Fun, remove_args(Val), Table, Graph) of
-        {resolved, pure} ->
-            true;
-        {resolved, impure} ->
-            %% TODO: Keep track of the offending function!
-            {false, <<"impure call to higher order function">>};
-        unresolved ->
-            Val
-    end.
-
-
-call_site_analysis(#pst{table = Tab} = St) ->
-    St#pst{table = dict:map(
-            fun(_, V) -> call_site_analysis(V, Tab) end, Tab)}.
-
-%% TODO:
-%% - Clean up if possible.
-call_site_analysis(Ctx0, Table) when is_list(Ctx0) ->
-    Ctx1 = [call_site_analysis1(remove_args(C), Table) || C <- Ctx0],
-    case [C || C <- Ctx1, C =/= true] of
-        [] ->
-            %% XXX This covers two cases:
-            %% - Call site analysis of all pure results.
-            %% - Call site analysis of pure functions with [] as their value.
-            %% Thus, conversion of `[]' to `true' takes place here.
-            true;
-        Ctx2 ->
-            case lists:keyfind(false, 1, Ctx2) of
-                false ->
-                    %% Return the possibly reduced context.
-                    Ctx2;
-                {false, _Reason} = Result ->
-                    Result
-            end
-    end;
-call_site_analysis(Value, _Table) ->
-    Value.
-
-call_site_analysis1({_Type, _MFA, _Args} = Value, Table) ->
-    case analyse_call(Value, Table) of
-        failed ->
-            Value;
-        Result ->
-            Result
-    end;
-call_site_analysis1(Value, _Table) ->
-    Value.
-
-%% @doc Return true/{false, Reason} or failed.
-analyse_call({_Type, CallMFA, Args} = Val, Table) ->
-    case dict:find(CallMFA, Table) of
-        {ok, [_|_] = Ctx0} ->
-            %% Remove the value being resolved from the context. This can
-            %% happen in recursive HOFs which call themselves with concrete
-            %% values (i.e. CallMFA =:= Caller).
-            Ctx1 = ctx_rem(Val, Ctx0),
-            case find_matching_args(Ctx1, Args) of
-                none ->
-                    failed;
-                %% The only way this can be resolved to a concrete value
-                %% is if an impure result is found, or *all* calls are pure.
-                {Found, MFAs} ->
-                    TheirPurity = [dict:find(F, Table) || F <- MFAs],
-                    case {Found, pick_only_concrete(TheirPurity)} of
-                        {all, pure} ->
-                            true;
-                        {_Any, impure} ->
-                            {false, bin("impure call to ~s", [fmt_mfa(CallMFA)])};
-                        _AnythingElse ->
-                            failed
-                    end
-            end;
-        {ok, undefined} ->
-            failed;
-        %% Any other values (true/false) will have been propagated by now.
-        error ->
-            failed
-    end.
-
-pick_only_concrete(Vals) ->
-    lists:foldl(fun reduce/2, pure, Vals).
-
-reduce({ok, Val}, Prev) ->
-    case impure_val(Val) of
-        true -> impure;
-        false ->
-            case pure_val(Val) andalso Prev =:= pure of
-                true -> pure;
-                false -> other
-            end
-    end;
-reduce(error, _) -> other.
-
-pure_val(true) -> true;
-pure_val([]) -> true;
-pure_val(_) -> false.
-
-impure_val(false) -> true;
-impure_val({false,_}) -> true;
-impure_val(_) -> false.
-
-find_matching_args(ArgDeps, DepArgs) ->
-    case match_args(ArgDeps, DepArgs, [], []) of
-        {[], _} ->
-            none;
-        {Matching, []} ->
-            {all, Matching};
-        {Matching, _Remaining} ->
-            {some, Matching}
-    end.
-
-match_args([{arg,N}=Arg|T], Deps0, Matching, Remaining) ->
-    case lists:keytake(N, 1, Deps0) of
-        {value, {N, MFA}, Deps1} ->
-            match_args(T, Deps1, [MFA|Matching], Remaining);
-        false ->
-            match_args(T, Deps0, Matching, [Arg|Remaining])
-    end;
-match_args([NonArg|T], Deps, Matching, Remaining) ->
-    match_args(T, Deps, Matching, [NonArg|Remaining]);
-match_args([], _Deps, Matching, Remaining) ->
-    {lists:reverse(Matching), lists:reverse(Remaining)}.
-
-
-%% @doc Detect functions which remain unresolved solely because of
-%% mutually recursive dependencies.
-%%
-%% The process is started by selecting those functions whose sole
-%% dependencies are other functions in the same (call graph) cycle.
-%% Then, this set of functions is gradually reduced, by filtering
-%% out any functions whose dependencies are not themselves part of
-%% the set. Only the surviving functions can be safely marked pure.
-mutual_analysis(#pst{cycles = undefined, table = T} = St) ->
-    %% Cache mapping of mutually recursive functions to their cycle.
-    %% This is only a minor optimisation, the biggest gain is from
-    %% waiting up to this point in the propagation to build the map.
-    mutual_analysis(St#pst{cycles = build_cycle_map(T)});
-mutual_analysis(#pst{cycles = C, table = T} = St) ->
-    Funs = [F || {F, _} <- converge(fun mutual_selection/1,
-                                    mutual_candidates(C, T))],
-    St#pst{table = update(T, Funs, true)}.
-
-mutual_candidates(Cycles, Tab) ->
-    dict:fold(fun(F, V, A) -> mutual_candidates(F, V, A, Cycles) end, [], Tab).
-
-mutual_candidates(F, Ctx, Acc, CM) when is_list(Ctx) ->
-    case just_deps(Ctx, []) of
-        {ok, Deps} ->
-            case all_mutual(F, Deps, CM) of
-                true ->
-                    [{F, Deps}|Acc];
-                false ->
-                    Acc
-            end;
-        error ->
-            Acc
-    end;
-mutual_candidates(_, _, Acc, _) ->
-    Acc.
-
-%% @doc If the dependency list consists exclusively of dependencies to
-%% other functions, return their MFAs, otherwise fail.
-just_deps([{_, {_,_,_} = F, _}|T], A) ->
-    just_deps(T, [F|A]);
-just_deps([], A) ->
-    {ok, lists:usort(A)};
-just_deps(_, _) ->
-    error.
-
-all_mutual(Fun, Deps, Cycles) ->
-    case dict:find(Fun, Cycles) of
-        {ok, _CycleID} = Result ->
-            lists:all(fun(F) -> dict:find(F, Cycles) =:= Result end, Deps);
-        error ->
-            false
-    end.
-
-mutual_selection(FunDeps) ->
-    Set = sets:from_list([F || {F, _} <- FunDeps]),
-    [V || {_, Deps} = V <- FunDeps,
-        lists:all(fun(D) -> sets:is_element(D, Set) end, Deps)].
-
-converge(Fun, Data) ->
-    case Fun(Data) of
-        Data ->
-            Data;
-        Next ->
-            converge(Fun, Next)
-    end.
-
-build_cycle_map(Tab) ->
-    cycle_map(digraph_utils:cyclic_strong_components(dependency_graph(Tab))).
-
-%% @doc Return a mapping of functions to the specific cycle in the call
-%% graph they are part of, if any.
-cycle_map(CyclicComponents) ->
-    %% There's no need to keep the actual cycles, just a unique reference.
-    dict:from_list([{F, N} || {N, CC} <- enumerate(CyclicComponents), F <- CC]).
-
-dependency_graph(Table) ->
-    dict:fold(fun add_edges/3, digraph:new(), Table).
-
-add_edges(Fun, Ctx, Graph) when is_list(Ctx) ->
-    MFAs = [MFA || {_, {_,_,_}=MFA, _} <- Ctx],
-    digraph:add_vertex(Graph, Fun),
-    lists:foreach(
-        fun(F) ->
-                digraph:add_vertex(Graph, F),
-                digraph:add_edge(Graph, Fun, F) end, MFAs),
-    Graph;
-add_edges(_, _, Graph) ->
-    Graph.
 
 
 %%% Various helpers. %%%
@@ -1612,9 +1038,6 @@ unzip1(Items) ->
 %% @doc Extract the Nth elements from a list of tuples.
 unzipN(N, Items) ->
     [element(N, Tuple) || Tuple <- Items].
-
-bin(Fmt, Args) ->
-    list_to_binary(io_lib:format(Fmt, Args)).
 
 
 
@@ -1668,9 +1091,9 @@ sup(A, B) -> sup(B, A).
 sup(Values) when is_list(Values) ->
     lists:foldl(fun sup/2, p, Values).
 
--spec propagate_new(dict(), purity_utils:options()) -> dict().
+-spec propagate_purity(dict(), purity_utils:options()) -> dict().
 
-propagate_new(Tab, _Opts) ->
+propagate_purity(Tab, _Opts) ->
     %% These functions work on previous types of values.
     %% Leave removal of self-recursive dependencies to the end of the
     %% preprocessing stage in order to exploit any information when
@@ -2211,7 +1634,9 @@ convert(Tab, Opts) ->
 %% values, since there can be only two states, terminating (pure) or
 %% non-terminating (equivalent to the maximal value of `side-effect').
 
-propagate_termination_new(Tab, _Opts) ->
+-spec propagate_termination(dict(), purity_utils:options()) -> dict().
+
+propagate_termination(Tab, _Opts) ->
     T1 = merge(add_bifs(Tab), dict:from_list(?PREDEF)),
     T2 = dict_vmap(fun convert_termination_value/1, T1),
     T3 = dict:store({erl, {'receive', infinite}}, {s, []}, T2),
@@ -2302,4 +1727,27 @@ intersection([S|Sets]) ->
 %% @doc Update a list of keys with the same value in a dictionary.
 dict_store(Keys, Value, Dict) ->
     lists:foldl(fun (K, D) -> dict:store(K, Value, D) end, Dict, Keys).
+
+
+propagate_both(Tab, Opts) ->
+    Tp = propagate_purity(Tab, Opts),
+    Tt = propagate_termination(Tab, Opts),
+    dict:merge(fun unite/3, Tp, Tt).
+
+unite(_, {Pp, Dp}, {Pt, Dt}) ->
+    case sup_at_least(Pp, Pt) of
+        s -> {s, []};
+        P -> {P, ordsets:union(Dp, Dt)}
+    end.
+
+sup_at_least({at_least, Pp}, {at_least, Pt}) ->
+    {at_least, sup(Pp, Pt)};
+sup_at_least({at_least, _}, s) ->
+    s;
+sup_at_least({at_least, Pp}, Pt) ->
+    {at_least, sup(Pp, Pt)};
+sup_at_least(Pp, Pt) when is_atom(Pp), is_atom(Pt) ->
+    sup(Pp, Pt);
+sup_at_least(Pp, Pt) when is_atom(Pp) ->
+    sup_at_least(Pt, Pp).
 
