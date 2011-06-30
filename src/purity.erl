@@ -1724,11 +1724,14 @@ contaminate(E, #s{tab = T} = S) ->
 
 contaminate(_, [], S) ->
     S;
+contaminate({_, s}, Fs, #s{tab = T, ws = W} = S) ->
+    S#s{ws = lists:foldl(fun ordsets:add_element/2, W, Fs),
+        tab = lists:foldl(fun (F, Tn) -> dict:store(F, {s, []}, Tn) end, T, Fs)};
 contaminate({E, Pe} = EP, [F|Fs], #s{tab = T} = S0) ->
     {Pf, Df} = lookup(F, T),
     S1 =
       case { sup(Pe, Pf), remove_dep(E, Df) } of
-        {P, D} when P =:= s orelse D =:= [] ->
+        {P, []} ->
             %% Fully-resolved function, strip dependency list.
             update_tab(F, P, [], extend_workset(F, S0));
         {P, D} ->
