@@ -190,6 +190,8 @@ format_val(C) when is_list(C) -> str("~w",[C]);
 format_val(V) -> str("~p",[V]).
 
 
+-spec
+filter_simplify_args(tab()) -> tab().
 filter_simplify_args(Tab) ->
     % Convert {arg,N} tuples to N for proper comparison with test results.
     [{K, simplify_args(V)} || {K, V} <- Tab].

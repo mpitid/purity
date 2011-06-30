@@ -1006,7 +1006,8 @@ propagate(Tab, Opts) ->
         false ->
             case option(termination, Opts) of
                 true ->
-                    propagate_termination(Tab, Opts);
+                    %propagate_termination(Tab, Opts);
+                    propagate_termination_new(Tab, Opts);
                 false ->
                     %propagate_purity(Tab, Opts)
                     propagate_new(Tab, Opts)
@@ -1781,7 +1782,6 @@ remove_dep(F, DepList) ->
 
 %%% Analysis of mutually recursive functions.
 
-%% FIXME: Naming of functions.
 resolve_independent_sccs(#s{tab = T, ws = []} = S) ->
     ICCs = with_graph(build_call_graph(T), fun locate_iccs/1),
     S#s{tab = lists:foldl(fun set_mutual_purity/2, T, ICCs),
@@ -2201,4 +2201,94 @@ convert(Tab, Opts) ->
            (_, {P, []}) -> dict:fetch(P, Map);
            (_, {P, D}) -> [P|D] end,
         Tab).
+
+
+%%% Termination analysis with the new algorithm. %%%
+%% Re-use as much as possible from the purity propagation algorithm.
+%% For instance, termination values are the subset {p, s} of purity
+%% values, since there can be only two states, terminating (pure) or
+%% non-terminating (equivalent to the maximal value of `side-effect').
+
+%% TODO:
+%% - Re-implement self-rec removal.
+propagate_termination_new(Tab, _Opts) ->
+    T1 = merge(add_bifs(Tab), dict:from_list(?PREDEF)),
+    T2 = dict_vmap(fun convert_termination_value/1, T1),
+    T3 = dict:store({erl, {'receive', infinite}}, {s, []}, T2),
+
+    S0 = #s{tab = T3,
+            rev = purity_utils:rev_deps(T1)},
+
+    S1 = preprocess_termination(S0),
+    T4 = converge_contaminate_termination(S1#s{ ws = initial_workset(S1#s.tab) }),
+    S2 = postprocess(S1#s{tab = T4}),
+
+    S2#s.tab.
+
+
+%% These correspond to BIFs. All BIFs are considered terminating.
+convert_termination_value([side_effects]) ->
+    {p, []};
+convert_termination_value([exceptions]) ->
+    {p, []};
+convert_termination_value([non_determinism]) ->
+    {p, []};
+%% Everything else is handled the same way as purity values.
+convert_termination_value(V) ->
+    convert_value(V).
+
+
+converge_contaminate_termination(#s{tab = T} = S0) ->
+    case mark_sccs(contaminate(S0)) of
+        #s{tab = T} -> T;
+        S1 -> converge_contaminate_termination(S1)
+    end.
+
+%% @doc When it comes to termination analysis this step overlaps with
+%% the contamination algorithm, and is not strictly necessary.
+%% Furthermore, it can be used before contamination, as was the case
+%% with the old termination analysis, to produce more starting values.
+%% However, building the call graph for sufficiently large data sets
+%% (e.g. the whole of OTP) is prohibitively slow. Instead, run it after
+%% an initial contamination run, to mark values as definitely impure,
+%% instead of unresolved which is how contamination leaves them.
+mark_sccs(#s{tab = T, ws = []} = S) ->
+    CSCs = with_graph(build_call_graph(T),
+                     fun digraph_utils:cyclic_strong_components/1),
+    W = workset(lists:flatten(CSCs)),
+    S#s{tab = dict_store(W, {s, []}, T), ws = W}.
+
+
+preprocess_termination(#s{tab = T} = S) ->
+    reset_visited(
+        strip_arg_deps(
+            mark_recursive(
+                unfold_hofs(
+                    S#s{ ws = initial_pre_workset(T) })))).
+
+
+%% @doc Mark any recursive functions as non-terminating.
+%% Prior to that, remove self-references from the dependency lists,
+%% as long as the recursive calls converge by passing continually
+%% "smaller" versions of some argument.
+mark_recursive(#s{tab = T0} = S) ->
+    T1 = dict:map(
+        fun (F, {_, D} = V) ->
+                case is_recursive(F, D) of
+                    true -> {s, []};
+                    false -> V end
+        end,
+        remove_selfrec_new(T0)),
+    S#s{tab = T1}.
+
+is_recursive(F, D) ->
+    lists:any(fun(E) -> is_rec(F, E) end, D).
+
+remove_selfrec_new(T) ->
+    dict:map(fun (F, {P, V}) -> {P, remove_selfrec_t(F, V)} end, T).
+
+
+%% @doc Update a list of keys with the same value in a dictionary.
+dict_store(Keys, Value, Dict) ->
+    lists:foldl(fun (K, D) -> dict:store(K, Value, D) end, Dict, Keys).
 
