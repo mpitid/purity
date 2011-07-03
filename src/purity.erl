@@ -1339,17 +1339,21 @@ unfold_hofs_dep_loop(F, [R|Rs], #s{tab = T} = S0) ->
 
             %% Distinguish visited nodes by deplist value as well, so that
             %% we can continue in case of self-recursion, as long as new
-            %% indirect arguments are added.
-            %NDL = lookup_deplist(R, S2#s.tab),
-            NDL = IndirectPositions,
-            case Which of
-                all ->
-                    case visited({F, R, NDL}, S0) of
+            %% indirect arguments are added. Add unknown values to the
+            %% working set as well, as long as some positions are found.
+            S3 =
+              case IndirectPositions of
+                [] -> S2;
+                IP ->
+                    Key = {F, R, IP},
+                    case visited(Key, S0) of
                         true -> S2;
-                        false -> set_visited({F, R, NDL}, extend_workset(R, S2))
-                    end;
-                maybe_some ->
-                    set_unknown(R, S2)
+                        false -> set_visited(Key, extend_workset(R, S2))
+                    end
+              end,
+            case Which of
+                all -> S3;
+                maybe_some -> set_unknown(R, S3)
             end
       end,
     unfold_hofs_dep_loop(F, Rs, Sn).
