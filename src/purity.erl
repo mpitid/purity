@@ -22,20 +22,37 @@
 %%%
 %%% @doc Pureness analysis of Erlang functions.
 %%%
+
+% FIXME:
+% - Characterise higher order function arguments as remote/local.
+
+% TODO
+% - Update predefined values and purity_bifs.erl generator.
+% - Clean up the rest of the modules, e.g. purity_cli.
+
+
 -module(purity).
+
+-define(utils, purity_utils_new).
+-define(bifs, purity_bifs).
+-define(plt, purity_plt_new).
 
 -export([module/2]).
 -export([module/3, modules/3]).
 -export([pmodules/3, panalyse/2]).
 -export([is_pure/2]).
--export([propagate/2, propagate_termination/2, propagate_purity/2,
+-export([propagate/2,
+         propagate_purity/2,
+         propagate_termination/2,
          find_missing/1]).
 -export([analyse_changed/3]).
 
 -export([purity_of/2, convert/2]).
 
--import(purity_utils, [str/2]).
--import(purity_utils, [dict_cons/3, filename_to_module/1]).
+
+-import(?utils, [dict_cons/3, dict_mapfold/3,
+                 dict_store/2, dict_store/3, dict_fetch/3 ]).
+-import(?utils, [str/2, filename_to_module/1 ]).
 
 -export_type([pure/0]).
 
@@ -44,11 +61,17 @@
 -endif.
 
 %% Besides built-in functions, a select few of Erlang expressions
-%% may influence the purity if functions.
--define(PREDEF, [
-        {{erl,{'receive',finite}},    [side_effects]},
-        {{erl,{'receive',infinite}},  [side_effects]},
-        {{erl,'catch'},               [non_determinism]}]).
+%% may influence the purity and termination of functions.
+-define(PREDEF_P, [
+        {{erl,{'receive',finite}},    {s, []}},
+        {{erl,{'receive',infinite}},  {s, []}},
+        {{erl,'catch'},               {d, []}}]).
+
+-define(PREDEF_T, [
+        {{erl,{'receive',finite}},    {p, []}},
+        {{erl,{'receive',infinite}},  {s, []}},
+        {{erl,'catch'},               {p, []}}]).
+
 %% Note that most exceptions are expressed in terms of the following
 %% BIFs and primops which are hard-coded elsewhere:
 %% {erlang,error,1}, {erlang,throw,1}, {erlang,exit,1}
@@ -104,32 +127,28 @@ is_pure({_,_,_} = MFA, Table) ->
 %% @see is_pure/2
 %% @see module/3
 %% @see propagate/2
--spec module(cerl:c_module(), purity_utils:options()) -> dict().
+-spec module(cerl:c_module(), ?utils:options()) -> dict().
 
 module(Core, Options) ->
     Plt = load_plt_silent(Options),
-    Tab = purity_plt:get_cache(Plt, Options),
+    Tab = ?plt:table(Plt, Options),
     Dep = module(Core, Options, Tab),
     Res = propagate(Dep, Options),
     Res.
 
 %% @doc Load a PLT from the provided options. If no PLT is found, or
 %% there are errors, return a new PLT.
--spec load_plt_silent(purity_utils:options()) -> purity_plt:plt().
+-spec load_plt_silent(?utils:options()) -> ?plt:plt().
 load_plt_silent(Opts) ->
-    File = option(plt, Opts, purity_plt:get_default_path()),
+    File = option(plt, Opts, ?plt:default_path()),
     Check = not option(no_check, Opts, false),
-    case purity_plt:load(File) of
+    case ?plt:load(File) of
         {error, _Type} ->
-            purity_plt:new();
+            ?plt:new();
         {ok, Plt} when Check ->
-            case purity_plt:check(Plt) of
-                old_version ->
-                    purity_plt:new();
-                {differ, _Failed} ->
-                    purity_plt:new();
-                ok ->
-                    Plt
+            case ?plt:verify(Plt) of
+                ok -> Plt;
+                _F -> ?plt:new()
             end;
         {ok, Plt} -> % No checks, unwise.
             Plt
@@ -177,7 +196,7 @@ load_plt_silent(Opts) ->
 %% @doc Return a list of MFAs and a list of primops for which we have no
 %% pureness information.
 
--spec find_missing(dict()) -> {[mfa()], [purity_utils:primop()]}.
+-spec find_missing(dict()) -> {[mfa()], [?utils:primop()]}.
 
 find_missing(Table) ->
     Set1 = ordsets:from_list(collect_function_deps(Table)),
@@ -187,61 +206,69 @@ find_missing(Table) ->
     Prim = ordsets:subtract(Set3, Set2),
     {Funs, Prim}.
 
-%% Populate the Table with the purity of any BIF necessary.
-%% XXX: Not the cleanest approach, but it has the least impact for the moment.
+%% Populate the table with the purity of any BIF necessary.
 add_bifs(Tab) ->
     lists:foldl(
-        fun(F, TabN) -> dict:store(F, is_bif_pure(F), TabN) end,
-        Tab, collect_bif_deps(Tab)).
+        fun(F, T) -> dict:store(F, convert_value(is_bif_pure(F)), T) end,
+        Tab, collect_bif_dependencies(Tab)).
+
 
 collect_function_deps(Tab) ->
-    collect_deps(Tab, fun purity_utils:is_concrete_fun/1).
-
+    collect_dependencies(Tab, fun ?utils:is_mfa/1).
 collect_primop_deps(Tab) ->
-    collect_deps(Tab, fun purity_utils:is_primop/1).
+    collect_dependencies(Tab, fun ?utils:is_primop/1).
 
-collect_bif_deps(Tab) ->
-    collect_deps(Tab, fun is_bif/1).
+collect_bif_dependencies(Table) ->
+    collect_dependencies(Table, fun is_bif/1).
 
-is_bif({M, F, A} = Fun) ->
-    purity_utils:is_concrete_fun(Fun) andalso purity_bifs:is_known(M, F, A);
-is_bif({P, A}=Pri) ->
-    purity_utils:is_primop(Pri) andalso purity_bifs:is_known(P, A);
+
+collect_dependencies(Table, Filter) ->
+    ?utils:uflatten(dict:fold(dep_collector(Filter), [], Table)).
+
+dep_collector(Filter) ->
+    fun (_, {_, DL}, Ds) -> [?utils:dependencies(DL, Filter, true)|Ds] end.
+
+
+%% FIXME: Make is_known work on tuples.
+is_bif({M,F,A}=Fun) ->
+    ?utils:is_mfa(Fun) andalso ?bifs:is_known(M, F, A);
+is_bif({P,A}=Fun) ->
+    ?utils:is_primop(Fun) andalso ?bifs:is_known(P, A);
 is_bif(_) ->
     false.
+
 
 is_bif_pure({M, F, A}) ->
     purity_bifs:is_pure(M, F, A);
 is_bif_pure({P, A}) ->
     purity_bifs:is_pure(P, A).
 
-%% @doc Return a list of any functions other functions may depend on.
-%% Apply any filtering here instead of the result as an optimisation.
-collect_deps(Tab, Filter) ->
-    dict:fold(
-        fun(_, V, Acc) ->
-                [F || F <- purity_utils:collect_dependencies(V),
-                    Filter(F)] ++ Acc end,
-        [], Tab).
 
+%% @doc Remove any files with errors from the PLT, and re-analyse
+%% changed files, as well as any dependencies thereof.
 
-%% @doc Re-analyse changed files and affected modules, update PLT.
--spec analyse_changed(purity_plt:changed_files(), purity_utils:options(), purity_plt:plt()) -> purity_plt:plt().
+-spec analyse_changed({[file:filename()], [file:filename()]},
+                      ?utils:options(), ?plt:plt()) -> ?plt:plt().
 
-analyse_changed(Changed, Options, Plt) ->
-    Mods = purity_plt:get_affected(Plt, Changed),
-    Errors = [F || {error, F} <- Changed],
-    Tab = purity_utils:delete_modules(
-        purity_plt:get_table(Plt), [filename_to_module(E) || E <- Errors]),
-    Files = purity_plt:get_files(Plt),
-    FileLookup = make_modlookup(Files),
-    ToScan = [F || {ok, F} <- [FileLookup(M) || M <- Mods]] -- Errors,
-    purity_plt:new(purity:modules(ToScan, Options, Tab), Files -- Errors).
+analyse_changed({Changed, Errors}, Options, Plt) ->
+    Combined = Changed ++ Errors,
+    %% First strip the table of both changed and removed files, so that
+    %% there are no left-over MFAs, e.g. when removing a function from a module.
+    T1 = ?utils:delete_modules(?plt:info_table(Plt), to_modules(Combined)),
+    %% Determine which modules should be re-analysed: Dependent -- Missing.
+    DM = ?plt:dependent_modules(Plt, Combined) -- to_modules(Errors),
+    %% We need the filenames of these modules. Since we cannot map a module to
+    %% a specific filename, figure this out by the list of filenames stored in
+    %% the PLT. It's a given that true == subset(DM, to_modules(Files)).
+    Files = ?plt:filenames(Plt) -- Errors,
+    Map = dict:from_list([{?utils:filename_to_module(F), F} || F <- Files]),
+    DF = [dict:fetch(M, Map) || M <- DM],
+    %% Collect information on these modules, and create a new PLT. Naturally
+    %% any cached result tables are dismissed.
+    ?plt:new(modules(DF, Options, T1), Files).
 
-%% @doc Generate a lokoup function mapping modules to their filename.
-make_modlookup(Filenames) ->
-    Map = dict:from_list([{filename_to_module(F), F} || F <- Filenames]),
-    fun(Mod) -> dict:find(Mod, Map) end.
+to_modules(Filenames) ->
+    [?utils:filename_to_module(F) || F <- Filenames].
 
 
 %% @spec module(cerl:c_module(), options(), dict()) -> dict()
@@ -253,7 +280,7 @@ make_modlookup(Filenames) ->
 %%
 %% @see modules/3
 
--spec module(cerl:c_module(), purity_utils:options(), dict()) -> dict().
+-spec module(cerl:c_module(), ?utils:options(), dict()) -> dict().
 
 module(Core, Options, Tab0) ->
     Module = cerl:concrete(cerl:module_name(Core)),
@@ -262,7 +289,7 @@ module(Core, Options, Tab0) ->
         fun({{F,_},_}, Set) -> ordsets:add_element(atom_to_list(F), Set) end,
         ordsets:new(),
         Defs),
-    St0 = state_new(Options, Names, purity_utils:delete_modules(Tab0, [Module])),
+    St0 = state_new(Options, Names, ?utils:delete_modules(Tab0, [Module])),
     Fun = fun({{F,A}, Fun}, St) ->
             analyse(Fun, St#state{mfa = {Module, F, A},
                                   nested = [],
@@ -280,16 +307,16 @@ module(Core, Options, Tab0) ->
 %%
 %% @see module/3
 
--spec modules([string()], purity_utils:options(), dict()) -> dict().
+-spec modules([string()], ?utils:options(), dict()) -> dict().
 
 modules(Modules, Options, Tab0) when is_list(Modules) ->
     lists:foldl(
         fun(File, TabN) ->
-                case purity_utils:get_core(File) of
+                case ?utils:get_core(File) of
                     {ok, Core} ->
                         module(Core, Options, TabN);
                     {error, Reason} ->
-                        purity_utils:emsg(Reason),
+                        ?utils:emsg(Reason),
                         TabN
                 end end,
         Tab0, Modules).
@@ -302,14 +329,14 @@ modules(Modules, Options, Tab0) when is_list(Modules) ->
 %% @see module/3
 %% @see modules/3
 
--spec pmodules([file:filename()], purity_utils:options(), dict()) -> dict().
+-spec pmodules([file:filename()], ?utils:options(), dict()) -> dict().
 
 pmodules(Modules, Options, Tab0) when is_list(Modules) ->
     CPUs = erlang:system_info(logical_processors),
     prune_merge(Tab0,
                 lists:zip([filename_to_module(M) || M <- Modules],
-                          purity_utils:pmap({purity, panalyse},
-                                            [Options], Modules, CPUs))).
+                          ?utils:pmap({purity, panalyse},
+                                      [Options], Modules, CPUs))).
 
 %% Before merging the tables remove any values with the same module
 %% that may be contained already. To make this faster first index
@@ -336,15 +363,15 @@ ungroup(Tab) ->
               dict:new(), Tab).
 
 
--spec panalyse(file:filename(), purity_utils:options()) -> dict().
+-spec panalyse(file:filename(), ?utils:options()) -> dict().
 
 panalyse(Filename, Options) ->
     Tab = dict:new(),
-    case purity_utils:get_core(Filename) of
+    case ?utils:get_core(Filename) of
         {ok, Core} ->
             module(Core, Options, Tab);
         {error, Reason} ->
-            purity_utils:emsg(Reason),
+            ?utils:emsg(Reason),
             Tab
     end.
 
@@ -988,7 +1015,7 @@ sub_new() -> {dict:new(), dict:new()}.
 %% @see propagate_purity/2
 %% @see propagate_termination/2
 
--spec propagate(dict(), purity_utils:options()) -> dict().
+-spec propagate(dict(), ?utils:options()) -> dict().
 
 propagate(Tab, Opts) ->
     case option(both, Opts) of
@@ -1061,8 +1088,8 @@ convert_value(true) ->
     {p, []};
 convert_value([exceptions]) ->
     {e, []};
-convert_value(false) ->
-    {s, []};
+%convert_value(false) ->
+%    {s, []};
 convert_value({false, _}) ->
     {s, []};
 convert_value([side_effects]) ->
@@ -1074,46 +1101,63 @@ convert_value(C) when is_list(C) ->
 convert_value(undefined) ->
     % This is a bit of a hack: in order to mark it unhandled, add a
     % nonsensical dependency.
-    {p, [undefined]};
-convert_value({_P, D} = NewValue) when is_list(D) ->
-    NewValue. % Preserve new type values.
+    {p, [undefined]}.
+%convert_value({_P, D} = NewValue) when is_list(D) ->
+%    NewValue. % Preserve new type values.
+
+
+initialise(Table) ->
+    ?utils:dict_map(fun initial_purity/1, Table).
+
+%% Initialise info tables to pure.
+initial_purity(DL) when is_list(DL) ->
+    {p, DL};
+%% Handle already processed tables transparently.
+initial_purity({_P, DL} = V) when is_list(DL) ->
+    V.
 
 
 %%% Pureness values have a well defined ordering: s > d > e > p
 %% @doc Implement the ordering relation of purity values.
+-spec sup(?utils:purity_level(), ?utils:purity_level()) -> ?utils:purity_level().
 sup(e, p) -> e;
 sup(d, p) -> d;
 sup(d, e) -> d;
 sup(s, _) -> s;
-sup(A, A) -> A;
-sup(A, B) -> sup(B, A).
+sup(A, A) when is_atom(A) -> A;
+sup(A, B) when is_atom(A), is_atom(B) -> sup(B, A).
 
+-spec sup([?utils:purity_level()]) -> ?utils:purity_level().
 sup(Values) when is_list(Values) ->
     lists:foldl(fun sup/2, p, Values).
 
--spec propagate_purity(dict(), purity_utils:options()) -> dict().
+-spec propagate_purity(dict(), ?utils:options()) -> dict().
 
 propagate_purity(Tab, _Opts) ->
     %% These functions work on previous types of values.
     %% Leave removal of self-recursive dependencies to the end of the
     %% preprocessing stage in order to exploit any information when
     %% unfolding HOFs.
-    T1 = add_predefined(add_bifs(Tab)),
-    T2 = dict_vmap(fun convert_value/1, T1),
+    T1 = add_predefined_purity(initialise(Tab)),
 
-    S0 = #s{tab = T2,
-            rev = purity_utils:rev_deps(T1)},
+    S0 = #s{tab = T1, rev = ?utils:function_rmap(T1)},
 
     S1 = preprocess(S0),
-    T3 = converge_contaminate(S1#s{ ws = initial_workset(S1#s.tab) }),
-    S2 = postprocess(S1#s{tab = T3}),
+    T2 = converge_contaminate(S1#s{ ws = initial_workset(S1#s.tab) }),
+    S2 = postprocess(S1#s{tab = T2}),
 
     S2#s.tab.
 
 
-%% @doc Update table with predefined values for certain expressions.
-add_predefined(Tab) ->
-    lists:foldl(fun({K, V}, D) -> dict:store(K, V, D) end, Tab, ?PREDEF).
+%% Update table with the values of any necessary BIFs as well
+%% as Erlang expressions.
+add_predefined_purity(Tab) ->
+    dict_store(?PREDEF_P, add_bifs(Tab)).
+
+add_predefined_termination(Tab) ->
+    %% All BIFs are considered terminating.
+    dict_store(?PREDEF_T,
+        dict_store(collect_bif_dependencies(Tab), {p, []}, Tab)).
 
 
 %% @doc Build the initial working set, consisting of any values with empty
@@ -1272,7 +1316,7 @@ collect_dep({erl, _} = E) ->
     E;
 collect_dep({Type, Fun, A}) when is_list(A) ->
     true = lists:member(Type, [local, remote, primop]),
-    case Type == primop orelse purity_utils:is_mfa(Fun) of
+    case Type == primop orelse ?utils:is_mfa(Fun) of
         true ->
             Fun;
         false ->
@@ -1286,11 +1330,11 @@ collect_dep(undefined) ->
 
 %% Call with variable module, function or both.
 is_variable({{var, M}, {var, F}, A}) ->
-    true = purity_utils:is_mfa({M,F,A});
+    true = ?utils:is_mfa({M,F,A});
 is_variable({{var, M}, F, A}) ->
-    true = purity_utils:is_mfa({M,F,A});
+    true = ?utils:is_mfa({M,F,A});
 is_variable({M, {var, F}, A}) ->
-    true = purity_utils:is_mfa({M,F,A});
+    true = ?utils:is_mfa({M,F,A});
 %% Variable application.
 is_variable(Var) when is_atom(Var) ->
     true.
@@ -1299,10 +1343,11 @@ is_variable(Var) when is_atom(Var) ->
 %%% Pre-Processing step:
 
 preprocess(#s{tab = T} = S) ->
-    reset_visited(
+    unmark_unknown(
+      reset_visited(
         strip_arg_deps(
-            unfold_hofs(
-                S#s{ ws = initial_pre_workset(T) }))).
+          unfold_hofs(
+              S#s{ ws = initial_pre_workset(T) })))).
 
 initial_pre_workset(Tab) ->
     dict:fold(fun collect_hofs/3, [], Tab).
@@ -1380,7 +1425,7 @@ update_reverse_deps(F, [D|Ds], #s{rev = R} = S) ->
     %% Only MFAs would be passed as concrete arguments to higher order
     %% functions.
     S1 =
-      case purity_utils:is_mfa(D) of
+      case ?utils:is_mfa(D) of
         true ->
             Rs = dict_fetch(D, R, []),
             S#s{rev = dict:store(D, ordsets:add_element(F, Rs), R)};
@@ -1405,6 +1450,17 @@ reset_visited(#s{} = S) ->
 
 %%% PRE: HOF helpers.
 
+%% XXX:
+%% Minor issue when starting the analysis from a pre-analysed table:
+%% Since HOFs have already been unfolded, and concrete arguments moved
+%% to the dependency list, in the case were the passed argument is the
+%% HOF itself, and when that dependency remains because it could not be
+%% resolved, there is now a new, unresolvable HOF dependency, which
+%% causes the function to be marked as unknown. The termination
+%% analysis of `mochiweb_request:read_chunks/1' is an example.
+%% I can't see it affecting the analysis in any way, besides giving
+%% different output between runs on the original table and cached
+%% versions of the result in the PLT (i.e. p [deps...] and >= p [deps...]).
 concrete_calls(F, Df, Dr, T) ->
     Positions = ordsets:from_list([N || {arg, N} <- Df]),
     Candidates = [Args || {_, D, Args} <- Dr, D =:= F],
@@ -1421,7 +1477,7 @@ concrete_calls(F, Df, Dr, T) ->
 
 find_calls(H, Positions, Args, T) ->
     Fs = [Fun || {N, Fun} <- Args,
-          purity_utils:is_concrete_fun(Fun),
+          ?utils:is_mfa(Fun),
           ordsets:is_element(N, Positions)],
     %% Passing HOFs as a concrete argument does not count, although
     %% the HOF is added to the returned list, so that is pureness value
@@ -1512,7 +1568,7 @@ restore_arg_deps(#s{tab = T0, diff = Diff} = S) ->
 
 postprocess(#s{unk = U} = S) ->
     restore_arg_deps(
-        mark_at_least(
+        mark_unknown(
             propagate_unhandled(
                 S#s{ ws = workset(sets:to_list(U)) }))).
 
@@ -1548,15 +1604,28 @@ propagate_unhandled(#s{ws = [F|Fs]} = S) ->
 
 
 %% @doc Change the purity of unknown functions from P to {at_least, P}.
-mark_at_least(#s{tab = T, unk = U} = S) ->
-    S#s{tab = sets:fold(fun mark_at_least/2, T, U)}.
+mark_unknown(#s{tab = T, unk = U} = S) ->
+    S#s{tab = sets:fold(fun mark_unknown/2, T, U)}.
 
-mark_at_least(F, T) ->
+mark_unknown(F, T) ->
     {P, D} = lookup(F, T),
     case P of
         s -> T; % s == at_least(s).
         _ -> dict:store(F, { {at_least, P}, D }, T)
     end.
+
+
+%% @doc Convert the purity of {at_least, P} functions to P and add them
+%% to the unknown set. This step is necessary when working with previous
+%% analysis results from a PLT.
+unmark_unknown(#s{tab = T, unk = U} = S) ->
+    {T1, U1} = dict_mapfold(fun unmark_unknown/3, U, T),
+    S#s{tab = T1, unk = U1}.
+
+unmark_unknown(F, {{at_least,P}, DL}, Unk) ->
+    {{P, DL}, sets:add_element(F, Unk)};
+unmark_unknown(_F, P, Unk) ->
+    {P, Unk}.
 
 
 %%% POST: State record helpers.
@@ -1585,25 +1654,6 @@ purity_of(F, T) ->
 
 %% Dict helpers.
 
-dict_vmap(Fun, D) ->
-    dict:map(fun(_, V) -> Fun(V) end, D).
-
-%% @doc Fetch a value from a dict or fallback to a default if missing.
-dict_fetch(Key, Dict, Default) ->
-    case dict:find(Key, Dict) of
-        {ok, Value} -> Value;
-        error -> Default
-    end.
-
-%% @doc Not as efficient as a native implementation would be,
-%% but usefull all the same.
-dict_mapfold(Fun, Acc0, Dict) ->
-    dict:fold(
-        fun(K, V1, {Map, Acc1}) ->
-                {V2, Acc2} = Fun(K, V1, Acc1),
-                {dict:store(K, V2, Map), Acc2} end,
-        {dict:new(), Acc0}, Dict).
-
 
 %% Digraph helpers.
 
@@ -1616,7 +1666,7 @@ with_graph(Graph, Function) ->
 
 
 %% Convert values to the true/false for comparison with the previous algorith.
--spec convert(dict(), purity_utils:options()) -> dict().
+-spec convert(dict(), ?utils:options()) -> dict().
 convert(Tab, Opts) ->
     Map = dict:from_list(
       case option(purelevel, Opts, 1) of
@@ -1638,33 +1688,17 @@ convert(Tab, Opts) ->
 %% values, since there can be only two states, terminating (pure) or
 %% non-terminating (equivalent to the maximal value of `side-effect').
 
--spec propagate_termination(dict(), purity_utils:options()) -> dict().
+-spec propagate_termination(dict(), ?utils:options()) -> dict().
 
 propagate_termination(Tab, _Opts) ->
-    T1 = merge(add_bifs(Tab), dict:from_list(?PREDEF)),
-    T2 = dict_vmap(fun convert_termination_value/1, T1),
-    T3 = dict:store({erl, {'receive', infinite}}, {s, []}, T2),
-
-    S0 = #s{tab = T3,
-            rev = purity_utils:rev_deps(T1)},
+    T1 = add_predefined_termination(initialise(Tab)),
+    S0 = #s{tab = T1, rev = ?utils:function_rmap(T1)},
 
     S1 = preprocess_termination(S0),
-    T4 = converge_contaminate_termination(S1#s{ ws = initial_workset(S1#s.tab) }),
-    S2 = postprocess(S1#s{tab = T4}),
+    T2 = converge_contaminate_termination(S1#s{ ws = initial_workset(S1#s.tab) }),
+    S2 = postprocess(S1#s{tab = T2}),
 
     S2#s.tab.
-
-
-%% These correspond to BIFs. All BIFs are considered terminating.
-convert_termination_value([side_effects]) ->
-    {p, []};
-convert_termination_value([exceptions]) ->
-    {p, []};
-convert_termination_value([non_determinism]) ->
-    {p, []};
-%% Everything else is handled the same way as purity values.
-convert_termination_value(V) ->
-    convert_value(V).
 
 
 converge_contaminate_termination(#s{tab = T} = S0) ->
@@ -1689,11 +1723,12 @@ mark_sccs(#s{tab = T, ws = []} = S) ->
 
 
 preprocess_termination(#s{tab = T} = S) ->
-    reset_visited(
+    unmark_unknown(
+      reset_visited(
         strip_arg_deps(
-            mark_recursive(
-                unfold_hofs(
-                    S#s{ ws = initial_pre_workset(T) })))).
+          mark_recursive(
+            unfold_hofs(
+                S#s{ ws = initial_pre_workset(T) }))))).
 
 
 %% @doc Mark any recursive functions as non-terminating, with the
@@ -1727,10 +1762,6 @@ intersection([]) ->
 intersection([S|Sets]) ->
     lists:foldl(fun ordsets:intersection/2, S, Sets).
 
-
-%% @doc Update a list of keys with the same value in a dictionary.
-dict_store(Keys, Value, Dict) ->
-    lists:foldl(fun (K, D) -> dict:store(K, Value, D) end, Dict, Keys).
 
 
 propagate_both(Tab, Opts) ->

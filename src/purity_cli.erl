@@ -29,6 +29,7 @@
 
 -import(purity_utils, [fmt_mfa/1, str/2, emsg/1, emsg/2]).
 
+-define(plt, purity_plt_new).
 
 %% @spec main() -> no_return()
 %%
@@ -66,12 +67,11 @@ main() ->
 
     Plt = case option(build_plt, Options) of
         true ->
-            purity_plt:new();
+            ?plt:new();
         false ->
             timeit("Loading PLT", fun() -> load_plt(Options) end)
     end,
-    {Table, Final} = do_analysis(Files, Options,
-        purity_plt:get_cache(Plt, Options)),
+    {Table, Final} = do_analysis(Files, Options, ?plt:table(Plt, Options)),
 
     %io:format("sizeof(Table): ~p, ~p~n", [erts_debug:size(Table), erts_debug:flat_size(Table)]),
     %io:format("sizeof(Final): ~p, ~p~n", [erts_debug:size(Final), erts_debug:flat_size(Final)]),
@@ -116,11 +116,12 @@ main() ->
 
     case option(build_plt, Options) orelse option(add_to_plt, Options) of
         true ->
-            PltIn = option(plt, Options, purity_plt:get_default_path()),
+            PltIn = option(plt, Options, ?plt:default_path()),
             PltOut = option(output_plt, Options, PltIn),
             ok = timeit("Updating PLT", fun() ->
-              Plt1 = purity_plt:update(Plt, Files, Table, Final, Options),
-              purity_plt:save(Plt1, PltOut) end);
+              {ok, Plt1} = ?plt:update(Plt, Options, {Files, Table, Final}),
+              %Plt1 = purity_plt:update(Plt, Files, Table, Final, Options),
+              ?plt:save(Plt1, PltOut) end);
         false ->
             ok
     end,
@@ -150,24 +151,23 @@ with_option(Opt, Options, Action) ->
     end.
 
 load_plt(Opts) ->
-    Fn = option(plt, Opts, purity_plt:get_default_path()),
+    Fn = option(plt, Opts, ?plt:default_path()),
     DoCheck = not option(no_check, Opts),
-    case purity_plt:load(Fn) of
+    case ?plt:load(Fn) of
         {error, Type} ->
             emsg("Could not load PLT file '~s': ~p", [Fn, Type]),
-            purity_plt:new();
+            ?plt:new();
         {ok, Plt} when DoCheck ->
-            case purity_plt:check(Plt) of
-                old_version ->
+            case ?plt:verify(Plt) of
+                incompatible_version ->
                     emsg("PLT is out of date, create a new one"),
-                    {fatal, old_version};
-                {differ, Failed} ->
+                    {fatal, incompatible_version};
+                {changed_files, Failing} ->
                     io:format("PLT will be updated because the following "
                               "modules have changed:~n~s",
-                                [string:join([format_changed(F)
-                                            || F <- Failed], "\n")]),
-                    New = purity:analyse_changed(Failed, Opts, Plt),
-                    ok = purity_plt:save(New, Fn),
+                              [string:join(format_changed(Failing),"\n")]),
+                    New = purity:analyse_changed(Failing, Opts, Plt),
+                    ok = ?plt:save(New, Fn),
                     New;
                 ok ->
                     Plt
@@ -176,10 +176,10 @@ load_plt(Opts) ->
             Plt
     end.
 
-format_changed({differ, F}) ->
-    str(" M  ~s", [F]);
-format_changed({error, F}) ->
-    str(" E  ~s", [F]).
+format_changed({Mismatch, Errors}) ->
+    [str(" M ~s", [F]) || F <- Mismatch] ++
+    [str(" E ~s", [F]) || F <- Errors].
+
 
 parse_args() ->
     Spec = [
@@ -305,6 +305,8 @@ fmt(P) when is_atom(P) ->
 fmt_deps(Ds) ->
     [fmt_dep(D) || D <- Ds].
 
+fmt_dep(undefined) ->
+    undefined;
 fmt_dep({arg,N}) ->
     N;
 fmt_dep({Type, Fun, Args}) ->
