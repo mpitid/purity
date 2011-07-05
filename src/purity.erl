@@ -28,7 +28,6 @@
 % - Characterise higher order function arguments as remote/local.
 
 % TODO
-% - Clean up the rest of the modules, e.g. purity_cli.
 
 
 -module(purity).

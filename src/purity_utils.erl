@@ -315,9 +315,6 @@ spawn_next(#pst{queue = []} = St0) ->
 %%% ___________________________________
 
 
-%% @spec get_core(file:filename()) -> Ret
-%% where
-%%    Ret = {ok, Core::cerl:c_module()} | {error, Reason::string()}
 %% @doc Compile to Core Erlang and return the parsed core tree.
 
 -type get_core_ret() :: {ok, cerl:c_module()} | {error, string()}.
@@ -326,9 +323,6 @@ spawn_next(#pst{queue = []} = St0) ->
 get_core(Filename) ->
     get_core(Filename, []).
 
-%% @spec get_core(file:filename(), [atom()]) -> Ret
-%% where
-%%    Ret = {ok, Core::cerl:c_module()} | {error, Reason::string()}
 %% @doc Compile to Core Erlang and return the parsed core tree.
 
 -spec get_core(file:filename(), [atom()]) -> get_core_ret().

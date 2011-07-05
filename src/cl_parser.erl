@@ -47,8 +47,6 @@
                desc     = []         :: desc()}).
 
 
-%% @spec parse_args(desc(), string()) -> {options(), arguments()}
-%%
 %% @doc Parse the command line and return a 2-tuple of options
 %% and plain arguments.
 %%

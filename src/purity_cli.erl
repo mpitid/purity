@@ -33,8 +33,6 @@
 
 -import(?utils, [fmt_mfa/1, str/2]).
 
-%% @spec main() -> no_return()
-%%
 %% @doc Parse any command line arguments, analyse all supplied files
 %% and print the results of the analysis to standard output.
 
