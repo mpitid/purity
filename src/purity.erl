@@ -27,7 +27,6 @@
 % - Characterise higher order function arguments as remote/local.
 
 % TODO
-% - Update predefined values and purity_bifs.erl generator.
 % - Clean up the rest of the modules, e.g. purity_cli.
 
 
@@ -42,6 +41,7 @@
 -export([pmodules/3, panalyse/2]).
 -export([is_pure/2]).
 -export([propagate/2,
+         propagate_both/2,
          propagate_purity/2,
          propagate_termination/2,
          find_missing/1]).
@@ -97,10 +97,7 @@
 
 -type sub() :: {dict(), dict()}.
 
--type pure()    :: true
-                 | false | {false, string() | binary()}
-                 | [context()]
-                 | undefined.
+-type pure() :: {?utils:purity(), ?utils:deplist()}.
 
 
 %% @spec is_pure(mfa(), dict()) -> boolean()
@@ -209,7 +206,7 @@ find_missing(Table) ->
 %% Populate the table with the purity of any BIF necessary.
 add_bifs(Tab) ->
     lists:foldl(
-        fun(F, T) -> dict:store(F, convert_value(is_bif_pure(F)), T) end,
+        fun(F, T) -> dict:store(F, ?bifs:is_pure(F), T) end,
         Tab, collect_bif_dependencies(Tab)).
 
 
@@ -228,20 +225,10 @@ collect_dependencies(Table, Filter) ->
 dep_collector(Filter) ->
     fun (_, {_, DL}, Ds) -> [?utils:dependencies(DL, Filter, true)|Ds] end.
 
+is_bif(Fun) ->
+    (?utils:is_mfa(Fun) orelse ?utils:is_primop(Fun))
+    andalso ?bifs:is_known(Fun).
 
-%% FIXME: Make is_known work on tuples.
-is_bif({M,F,A}=Fun) ->
-    ?utils:is_mfa(Fun) andalso ?bifs:is_known(M, F, A);
-is_bif({P,A}=Fun) ->
-    ?utils:is_primop(Fun) andalso ?bifs:is_known(P, A);
-is_bif(_) ->
-    false.
-
-
-is_bif_pure({M, F, A}) ->
-    purity_bifs:is_pure(M, F, A);
-is_bif_pure({P, A}) ->
-    purity_bifs:is_pure(P, A).
 
 
 %% @doc Remove any files with errors from the PLT, and re-analyse
@@ -1078,37 +1065,15 @@ unzipN(N, Items) ->
             ws   = []         :: list(),
             cs   = sets:new() :: set()}).
 
-%% Migration helpers:
-%% Convert values from the previous algorithm to the ones needed by
-%% the current one. Handle new values transparently, as will also
-%% be used on new tables when loading from a PLT.
 
-%% The new value is a 2-tuple: {Purity, Dependency List}
-convert_value(true) ->
-    {p, []};
-convert_value([exceptions]) ->
-    {e, []};
-%convert_value(false) ->
-%    {s, []};
-convert_value({false, _}) ->
-    {s, []};
-convert_value([side_effects]) ->
-    {s, []};
-convert_value([non_determinism]) ->
-    {d, []};
-convert_value(C) when is_list(C) ->
-    {p, C};
-convert_value(undefined) ->
-    % This is a bit of a hack: in order to mark it unhandled, add a
-    % nonsensical dependency.
-    {p, [undefined]}.
-%convert_value({_P, D} = NewValue) when is_list(D) ->
-%    NewValue. % Preserve new type values.
-
-
+%% Convert a lookup table returned by the analysis to the one required
+%% by the propagation stage by providing an initial purity for each
+%% function. Since this stage can also be applied to mixed tables, when
+%% a PLT has been loaded for instance, handle new values transparently.
 initialise(Table) ->
     ?utils:dict_map(fun initial_purity/1, Table).
 
+-spec initial_purity(?utils:deplist()) -> pure() ; (P) -> P when P :: pure().
 %% Initialise info tables to pure.
 initial_purity(DL) when is_list(DL) ->
     {p, DL};
@@ -1764,6 +1729,7 @@ intersection([S|Sets]) ->
 
 
 
+-spec propagate_both(dict(), ?utils:options()) -> dict().
 propagate_both(Tab, Opts) ->
     Tp = propagate_purity(Tab, Opts),
     Tt = propagate_termination(Tab, Opts),

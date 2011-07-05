@@ -29,7 +29,7 @@ report() {
 
 extra_tests() {
     $tests/duplicates $tests/d1/a.erl $tests/d2/a.erl
-    $tests/combined_analysis $tests/*.erl
+    #$tests/combined_analysis $tests/*.erl
 }
 
 main $@

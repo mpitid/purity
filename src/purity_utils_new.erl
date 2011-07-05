@@ -45,7 +45,7 @@
 -export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
 
 
--export_type([options/0, purity/0, purity_level/0, deplist/0]).
+-export_type([options/0, purity/0, purity_level/0, deplist/0, primop/0]).
 
 
 -ifdef(TEST).

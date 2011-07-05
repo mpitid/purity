@@ -3,14 +3,14 @@
 ## Refer to the `bifs' for a more thorough explanation of the format.
 # vim: set noet ts=8:
 ## erlang
-erlang,apply,2	[{arg,1}]
-erlang,spawn,1	se
-erlang,spawn,4	se
-erlang,integer_to_list,2		[{remote,{erlang,integer_to_list,1},[]}]
-erlang,list_to_integer,2		[{remote,{erlang,list_to_integer,1},[]}]
-erlang,localtime_to_universaltime,1	[{remote,{erlang,localtime_to_universaltime,2},[]}]
-erlang,max,2	true
-erlang,min,2	true
+erlang,apply,2	e [{arg,1}]
+erlang,spawn,1	s
+erlang,spawn,4	s
+erlang,integer_to_list,2		e [{remote,{erlang,integer_to_list,1},[]}]
+erlang,list_to_integer,2		e [{remote,{erlang,list_to_integer,1},[]}]
+erlang,localtime_to_universaltime,1	d [{remote,{erlang,localtime_to_universaltime,2},[]}]
+erlang,max,2	p
+erlang,min,2	p
 ## Many functions depend on this but we can't analyse it fully atm.
-io_lib,format,2	ex
-#lists,duplicate,2 ex
+io_lib,format,2	e
+#lists,duplicate,2 e

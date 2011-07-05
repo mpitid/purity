@@ -9,13 +9,12 @@ strip_bare() {
 
 ## Expand aliases for pureness values.
 expand_purity() {
-    sed '
-      s/[ \t]\+false$/ {false,"BIF"}/;
-      s/[ \t]\+ex$/ [exceptions]/;
-      s/[ \t]\+se$/ [side_effects]/;
-      s/[ \t]\+nd$/ [non_determinism]/;
-      ' $@
-}
+    sed -r '
+       s/[ \t]+>= ([peds])$/ {{at_least,\1},[]}/;
+       s/[ \t]+([peds])$/ {\1,[]}/;
+       s/[ \t]+([peds])( +\[.+\])$/ {\1,\2}/;
+       ' $@
+   }
 
 convert() {
     sed '
@@ -36,7 +35,10 @@ select_primops() {
 header() {
     cat <<EOF
 -module(purity_bifs).
--export([is_pure/3, is_known/3, is_pure/2, is_known/2]).
+
+-export([is_pure/3, is_known/3]).
+-export([is_pure/2, is_known/2]).
+-export([is_pure/1, is_known/1]).
 
 %% Dialyzer complains of supertypes.
 %-spec is_pure(atom(), atom(), arity()) -> purity:pure() | unknown.
@@ -66,8 +68,27 @@ is_pure(P, A) when is_atom(P), A >= 0, A =< 255 ->
 
 is_known(P, A) ->
   is_pure(P, A) =/= unknown.
+
+
+%% Combine the two functions into one for convenience.
+
+-spec is_pure(term()) -> purity:pure() | unknown.
+
+is_pure({M,F,A}) ->
+  is_pure(M, F, A);
+is_pure({P, A}) ->
+  is_pure(P, A);
+is_pure(_) ->
+  unknown.
+
+-spec is_known(term()) -> boolean().
+
+is_known(BIF) ->
+  is_pure(BIF) =/= unknown.
+
 EOF
 }
+
 
 if [[ -n $@ ]]; then
     header
