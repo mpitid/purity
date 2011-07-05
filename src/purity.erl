@@ -78,18 +78,9 @@
 %% {erlang,error,1}, {erlang,throw,1}, {erlang,exit,1}
 %% {match_fail,1}, {raise,2}
 
-%% The special values are the lowest level dependencies a function
-%% can have, and their purity is defined by the user upon invocation
-%% of the analysis (except side-effects which are always impure).
--type special() :: side_effects | non_determinism | exceptions.
--type arg_dep() :: {arg, pos_integer()}.
--type ctx_arg() :: {pos_integer(), mfa()}.
--type context() :: {remote, purity_utils:emfa(), [ctx_arg()]}
-                 | {local, mfa() | atom(), [ctx_arg()]}
-                 | {primop, {atom(), arity()}, [ctx_arg()]}
-                 | arg_dep()
-                 | {erl, {'receive', finite | infinite} | 'catch'}
-                 | special().
+-type deplist() :: ?utils:deplist().
+-type argument() :: ?utils:argument().
+-type dependency() :: ?utils:dependency().
 
 
 -type map_key() :: cerl:var_name().
@@ -101,8 +92,6 @@
 -type pure() :: {?utils:purity(), ?utils:deplist()}.
 
 
-%% @spec is_pure(mfa(), dict()) -> boolean()
-%%
 %% @doc Simple purity test, only distinguishes between pure and impure.
 %% Any function missing from the lookup table is also considered impure.
 -spec is_pure(mfa(), dict()) -> boolean().
@@ -115,8 +104,6 @@ is_pure({_,_,_} = MFA, Table) ->
             false
     end.
 
-%% @spec module(cerl:c_module(), purity_utils:options()) -> dict()
-%%
 %% @doc Analyse a module and return a lookup table of concrete results,
 %% indexed by `{Module, Function, Arity}'.
 %%
@@ -176,7 +163,7 @@ load_plt_silent(Opts) ->
 %% table    - Mapping of MFAs to their pureness result, be that a concrete
 %%            value or a context.
 -record(state, {mfa     = undefined  :: mfa() | undefined,
-                ctx     = ctx_new()  :: [context()],
+                ctx     = ctx_new()  :: deplist(),
                 vars    = map_new()  :: map(),
                 args    = map_new()  :: map(),
                 subs    = sub_new()  :: sub(),
@@ -259,8 +246,6 @@ to_modules(Filenames) ->
     [?utils:filename_to_module(F) || F <- Filenames].
 
 
-%% @spec module(cerl:c_module(), options(), dict()) -> dict()
-%%
 %% @doc Analyse a module and return a lookup table of functions
 %% and dependencies, indexed by `{Module, Function, Arity}'.
 %%
@@ -886,7 +871,7 @@ enum_args(Args) ->
 
 %% @doc Find any arguments in the list which represents a function.
 %% Return a list of {Position, MFA} tuples.
-%-spec harvest_args(cerl:cerl(), state()) -> [ctx_arg()]. %% dialyzer chokes on cerl().
+%-spec harvest_args(cerl:cerl(), state()) -> [argument()]. %% dialyzer chokes on cerl().
 harvest_args(Args, #state{} = St) ->
     lists:usort(lists:foldl(
             fun(NV, Acc) -> find_arg(NV, St, Acc) end, [], enum_args(Args))).
@@ -922,7 +907,7 @@ find_arg({N, Var}, #state{} = St, Acc)
 ctx_new() ->
     ordsets:new().
 
--spec ctx_add(context(), [context()]) -> [context()].
+-spec ctx_add(dependency(), D) -> D when D :: deplist().
 ctx_add(Value, Ctx) ->
     ordsets:add_element(Value, Ctx).
 

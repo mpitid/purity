@@ -27,9 +27,11 @@
 
 -export([main/0]).
 
--import(purity_utils, [fmt_mfa/1, str/2, emsg/1, emsg/2]).
 
 -define(plt, purity_plt_new).
+-define(utils, purity_utils_new).
+
+-import(?utils, [fmt_mfa/1, str/2]).
 
 %% @spec main() -> no_return()
 %%
@@ -93,7 +95,7 @@ main() ->
             end
     end,
 
-    Modules = [purity_utils:filename_to_module(M) || M <- Files],
+    Modules = [?utils:filename_to_module(M) || M <- Files],
     case option(quiet, Options) of
         false -> % Print results.
             Requested = sets:from_list(Modules),
@@ -101,7 +103,7 @@ main() ->
             lists:foreach(fun(A) -> pretty_print(Print, A) end, lists:sort(
                     [V || {{M,_,_}=MFA, _} = V <- dict:to_list(Final),
                         sets:is_element(M, Requested),
-                        not purity_utils:internal_function(MFA)]));
+                        not ?utils:internal_function(MFA)]));
         true ->
             ok
     end,
@@ -155,12 +157,12 @@ load_plt(Opts) ->
     DoCheck = not option(no_check, Opts),
     case ?plt:load(Fn) of
         {error, Type} ->
-            emsg("Could not load PLT file '~s': ~p", [Fn, Type]),
+            ?utils:emsg("Could not load PLT file '~s': ~p", [Fn, Type]),
             ?plt:new();
         {ok, Plt} when DoCheck ->
             case ?plt:verify(Plt) of
                 incompatible_version ->
-                    emsg("PLT is out of date, create a new one"),
+                    ?utils:emsg("PLT is out of date, create a new one"),
                     {fatal, incompatible_version};
                 {changed_files, Failing} ->
                     io:format("PLT will be updated because the following "
@@ -257,8 +259,7 @@ option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
 
 
--type pure() :: true | {false, string()} | [any()] | undefined.
--spec pretty_print(fun((_,_) -> ok), {purity_utils:emfa(), pure()}) -> ok.
+-spec pretty_print(fun((_,_) -> _), {?utils:emfa(), purity:pure()}) -> _.
 
 pretty_print(Print, {MFA, Result}) ->
     Print("~s ~s.~n", [fmt_mfa(MFA), fmt(Result)]).
@@ -280,46 +281,37 @@ print_missing(Print, Table) ->
 %% @doc Consistent one-line formatting of purity results. Helps
 %% produce cleaner diffs of the output.
 
-%-spec fmt(pure()) -> string().
-
-fmt(true) ->
-    "true";
-fmt(false) ->
-    "false";
-fmt({false, Reason}) ->
-    str("{false,\"~s\"}", [Reason]);
-fmt(undefined) ->
-    "undefined";
-fmt(Ctx) when is_list(Ctx) ->
-    str("~w", [purity_utils:remove_args(Ctx)]);
+-spec fmt(purity:pure()) -> string().
 
 fmt({P, []}) ->
     fmt(P);
 fmt({P, D}) when is_list(D) ->
-    str("~s ~w", [fmt(P), fmt_deps(D)]);
+    str("~s ~w", [fmt(P), simplify_deps(D)]);
 fmt({at_least, P}) ->
     str(">= ~s", [P]);
 fmt(P) when is_atom(P) ->
     atom_to_list(P).
 
-fmt_deps(Ds) ->
-    [fmt_dep(D) || D <- Ds].
+simplify_deps(Ds) ->
+    [simplify_dep(D) || D <- Ds].
 
-fmt_dep(undefined) ->
-    undefined;
-fmt_dep({arg,N}) ->
+simplify_dep({arg, N}) ->
     N;
-fmt_dep({Type, Fun, Args}) ->
-    {Type, Fun, [A || A <- Args, not is_removable(A)]};
-fmt_dep({free, {F, Args}}) ->
-    case [A || A <- Args, not is_removable(A)] of
+simplify_dep({Type, Fun, Args}) ->
+    {Type, Fun, unclutter(Args)};
+simplify_dep({free, {F, Args}}) ->
+    case unclutter(Args) of
         [] -> {free, F};
         As -> {free, {F, As}}
-    end.
+    end;
+simplify_dep(Dep) ->
+    Dep.
 
-is_removable({arg, {_, _}}) -> true;
-is_removable({sub, _}) -> true;
-is_removable(_) -> false.
+unclutter(Args) -> [A || A <- Args, not is_clutter(A)].
+
+is_clutter({arg, {_, _}}) -> true;
+is_clutter({sub, _}) -> true;
+is_clutter(_) -> false.
 
 
 

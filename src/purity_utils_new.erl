@@ -34,7 +34,7 @@
 -export([dict_map/2, dict_fold/2, dict_mapfold/3, dict_cons/3]).
 -export([dict_store/2, dict_store/3, dict_fetch/3, dict_update/2]).
 
--export([uflatten/1, str/2, filename_to_module/1]).
+-export([uflatten/1, str/2, fmt_mfa/1, filename_to_module/1]).
 
 -export([internal_function/1]).
 
@@ -45,7 +45,8 @@
 -export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
 
 
--export_type([options/0, purity/0, purity_level/0, deplist/0, primop/0]).
+-export_type([options/0, purity/0, purity_level/0, primop/0, emfa/0]).
+-export_type([dependency/0, deplist/0, argument/0]).
 
 
 -ifdef(TEST).
@@ -79,7 +80,8 @@
                     | {remote, emfa(), [argument()]}
                     | {local, mfa() | atom(), [argument()]}
                     | {free, atom(), [argument()]} %% Free variable.
-                    | {primop, primop(), [argument()]}.
+                    | {primop, primop(), [argument()]}
+                    | {erl, 'catch' | {'receive', finite|infinite}}. %% Erlang expression.
 
 -type argument() :: {pos_integer(), mfa()} %% Concrete argument passed as argument.
                   %% The positions of an argument passed on to another call.
@@ -227,6 +229,12 @@ uflatten(List) ->
 str(Fmt, Args) ->
     lists:flatten(io_lib:format(Fmt, Args)).
 
+
+-spec fmt_mfa(emfa() | primop()) -> string().
+fmt_mfa({M, F, A}) -> % emfa
+    str("~p:~p/~b", [M, F, A]);
+fmt_mfa({P, A}) -> % primop
+    str("~p:/~b", [P, A]).
 
 %% @doc Return what should correspond to the Erlang module for the
 %% specified filename.

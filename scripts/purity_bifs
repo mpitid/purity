@@ -40,12 +40,7 @@ header() {
 -export([is_pure/2, is_known/2]).
 -export([is_pure/1, is_known/1]).
 
-%% Dialyzer complains of supertypes.
-%-spec is_pure(atom(), atom(), arity()) -> purity:pure() | unknown.
--spec is_known(atom(), atom(), arity()) -> boolean().
-
-%-spec is_pure(atom(), arity()) -> purity:pure() | unknown.
--spec is_known(atom(), arity()) -> boolean().
+-spec is_pure(atom(), atom(), arity()) -> purity:pure() | unknown.
 
 EOF
 }
@@ -55,8 +50,12 @@ footer1() {
 is_pure(M, F, A) when is_atom(M), is_atom(F), A >= 0, A =< 255 ->
   unknown.
 
+-spec is_known(atom(), atom(), arity()) -> boolean().
+
 is_known(M, F, A) ->
   is_pure(M, F, A) =/= unknown.
+
+-spec is_pure(atom(), arity()) -> purity:pure() | unknown.
 
 EOF
 }
@@ -65,6 +64,8 @@ footer2() {
     cat <<EOF
 is_pure(P, A) when is_atom(P), A >= 0, A =< 255 ->
   unknown.
+
+-spec is_known(atom(), arity()) -> boolean().
 
 is_known(P, A) ->
   is_pure(P, A) =/= unknown.

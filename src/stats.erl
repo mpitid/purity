@@ -25,6 +25,8 @@
 
 -module(stats).
 
+-define(utils, purity_utils_new).
+
 -export([gather/2, write/2]).
 
 -export_type([stats/0]).
@@ -73,7 +75,7 @@ write_stats(Io, Stats) ->
     lists:foreach(fun(S) -> format(Io, S) end, Stats),
     {_Ms, Ss} = lists:unzip(Stats),
     Sum = sum(Ss),
-    Fmt = join(" ", [purity_utils:str("~s ~~.1f", [H]) || H <- ?HEADERS]),
+    Fmt = join(" ", [?utils:str("~s ~~.1f", [H]) || H <- ?HEADERS]),
     Vals = [percent(F, Sum) || F <- ?FIELDS],
     io:format(Io,
               "# Aggregate: " ++ Fmt ++ " modules ~b functions ~b~n",
@@ -95,7 +97,7 @@ add_stats(#stats{}=S1, #stats{}=S2) ->
 
 
 update_stats({{M,_,_} = MFA, Val}, Dict) ->
-    case purity_utils:internal_function(MFA) of
+    case ?utils:internal_function(MFA) of
         true -> % Ignore internal functions.
             Dict;
         false ->
