@@ -14,7 +14,7 @@
 %% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 %% 02110-1301 USA
 %%
-%% @copyright 2009-2010 Michael Pitidis, Kostis Sagonas
+%% @copyright 2009-2011 Michael Pitidis, Kostis Sagonas
 %% @author Michael Pitidis <mpitid@gmail.com>
 %% @end
 %% =====================================================================
@@ -25,81 +25,81 @@
 
 -module(purity_plt).
 
--export([new/0, new/2]).
--export([check/1, update/5, remove_files/2]).
--export([load/1, save/2, get_default_path/0]).
--export([get_table/1, get_cache/2, get_version/1, get_files/1, get_affected/2]).
+-define(utils, purity_utils).
 
--import(purity_utils, [str/2, filename_to_module/1]).
+-import(?utils, [dict_fetch/3, dict_map/2, dict_update/2]).
+-import(?utils, [str/2, uflatten/1]).
 
--export_type([plt/0, changed_files/0]).
+-export([load/1, save/2, default_path/0]).
+-export([new/0, new/2, update/3, verify/1]).
+-export([version/1, table/2, info_table/1, result_table/2]).
+-export([dependent_modules/2, filenames/1]).
 
--define(VERSION, "0.3").
+-export_type([plt/0]).
 
--type file_cksum() :: {file:filename(), binary()}.
+-define(VERSION, "0.4").
 
--type files() :: [file:filename()].
+-ifdef(TEST).
+-include("purity_plt_tests.hrl").
+-endif.
+
+%% Record and type definitions.
 
 -record(plt, {version   = ?VERSION   :: string(),
-              checksums = []         :: [file_cksum()],
-              mod_deps  = dict:new() :: dict(),
+              checksums = []         :: [file_checksum()],
+              modules   = dict:new() :: dict(),
               table     = dict:new() :: dict(),
               cache     = []         :: [{term(), dict()}]}).
 
 -opaque plt() :: #plt{}.
 
+%% Some type shortcuts.
+-type files() :: [file:filename()].
+-type options() :: ?utils:options().
+-type file_checksum() :: {file:filename(), binary()}.
+
+
+%%% Creation and access functions %%%
 
 -spec new() -> plt().
-
 new() ->
     #plt{}.
 
-
 -spec new(dict(), files()) -> plt().
-
 new(Table, Filenames) ->
-    Checksums = compute_checksums(absolute(Filenames)),
     #plt{table = Table,
-         checksums = Checksums,
-         mod_deps = purity_utils:rev_mod_deps(Table)}.
+         modules = module_dependencies(Table),
+         checksums = compute_checksums(absolute(Filenames))}.
 
-absolute(Filenames) ->
-    [filename:absname(F) || F <- Filenames].
+-spec table(plt(), options()) -> dict().
+table(#plt{} = Plt, Options) ->
+    case result_table(Plt, Options) of
+        {ok, Table} -> Table;
+        error -> info_table(Plt)
+    end.
 
--spec get_table(plt()) -> dict().
+-spec result_table(plt(), options()) -> error | {ok, dict()}.
+result_table(#plt{cache = C}, Options) ->
+    assoc_find(cache_key(Options), C).
 
-get_table(#plt{table = Table}) ->
+ -spec info_table(plt()) -> dict().
+info_table(#plt{table = Table}) ->
     Table.
 
 
-%% @doc Return the cached version of the table, falling back to the
-%% original one if no cache is found.
--spec get_cache(plt(), purity_utils:options()) -> dict().
-
-get_cache(#plt{table = Tab, cache = Cache}, Options) ->
-    case assoc_find(cache_key(Options), Cache) of
-        {ok, Table} ->
-            preprocess(Table);
-        error ->
-            Tab
-    end.
+-spec version(plt()) -> string().
+version(#plt{version = V}) -> V.
 
 
--spec get_version(plt()) -> string().
-
-get_version(#plt{version = Version}) ->
-    Version.
-
-
-%% @doc Return the list of filenames whose pureness values are
-%% contained in the PLT.
--spec get_files(plt()) -> files().
-
-get_files(#plt{checksums = Sums}) ->
+-spec filenames(plt()) -> files().
+filenames(#plt{checksums = Sums}) ->
     [F || {F, _C} <- Sums].
 
 
--type load_errors() :: malformed_plt_data | no_such_file | read_error.
+%%% Persistence related functions %%%
+
+-type load_errors() :: not_plt | no_such_file | read_error.
+
 -spec load(file:filename()) -> {ok, plt()} | {error, load_errors()}.
 
 load(Filename) ->
@@ -110,7 +110,7 @@ load(Filename) ->
                     {ok, Plt}
             catch
                 _:_ ->
-                    {error, malformed_plt_data}
+                    {error, not_plt}
             end;
         {error, enoent} ->
             {error, no_such_file};
@@ -131,9 +131,9 @@ save(Plt, Filename) ->
     end.
 
 
--spec get_default_path() -> file:filename().
+-spec default_path() -> file:filename().
 
-get_default_path() ->
+default_path() ->
     case os:getenv("PURITY_PLT") of
         false ->
             case os:getenv("HOME") of
@@ -148,51 +148,44 @@ get_default_path() ->
     end.
 
 
--type file_sum() :: {file:filename(), binary()}.
--type changed_files() :: [{differ | error, file:filename()}].
+%%% PLT Verification %%%
 
--spec check(plt()) -> ok | old_version | {differ, changed_files()}.
+ -spec verify(plt()) -> ok
+                      | incompatible_version
+                      | {changed_files, {files(), files()}}.
 
-check(#plt{checksums = Sums} = P) ->
-    case check_version(P) of
-        error ->
-            old_version;
-        ok ->
-            case lists:foldl(fun check_file/2, [], Sums) of
-                [] ->
-                    ok;
-                Failed ->
-                    {differ, Failed}
-            end
-    end.
+verify(#plt{version = ?VERSION, checksums = Sums}) ->
+    case verify_file_checksums(Sums) of
+        {[], []} ->
+            ok;
+        Failing ->
+            {changed_files, Failing}
+    end;
+verify(#plt{}) ->
+    incompatible_version.
 
+verify_file_checksums(Sums) ->
+    lists:foldl(fun verify_file/2, {[], []}, Sums).
 
-check_version(#plt{version = ?VERSION}) ->
-    ok;
-check_version(#plt{}) ->
-    error.
-
-check_file({Filename, Checksum}, Failed) ->
-    case compute_checksum(Filename) of
-        {ok, Checksum} ->
-            Failed;
-        {ok, _Different} ->
-            [{differ, Filename}|Failed];
+verify_file({F, C}, {Mismatches, Errors} = Failing) ->
+    case compute_checksum(F) of
+        {ok, C} ->
+            Failing;
+        {ok, _Differs} ->
+            {[F|Mismatches], Errors};
         {error, _Reason} ->
-            [{error, Filename}|Failed]
+            {Mismatches, [F|Errors]}
     end.
 
 
-%% @doc This function assumes all of the files have been previously
-%% examined, and their checksum can be computed without error.
--spec compute_checksums(files()) -> [file_sum()].
+%%% Checksum helpers %%%
 
+%% @doc Assumes the files have already been examined and the checksum
+%% can be computed without error.
 compute_checksums(Filenames) ->
-    Combine = fun(F, {ok, Sum}) -> {F, Sum} end,
+    Combine = fun (F, {ok, Sum}) -> {F, Sum} end,
     lists:zipwith(Combine, Filenames, [compute_checksum(F) || F <- Filenames]).
 
-
--spec compute_checksum(file:filename()) -> {ok, binary()} | {error, string()}.
 
 compute_checksum(Filename) ->
     case filelib:is_regular(Filename) of
@@ -208,78 +201,76 @@ compute_checksum(Filename) ->
     end.
 
 
-%% @doc Update PLT with a new table and cache, for the extra files provided.
-%% The Table is considered to include up-to-date values for both previous
-%% files, and ExtraFiles.
-%%
-%% It is however possible that not all files are valid, even though
-%% they could have been analysed. This could be because they were
-%% e.g. deleted between the call to analysis and the call to update.
-%% Any module we can't checksum is therefore removed from both tables.
--spec update(plt(), files(), dict(), dict(), purity_utils:options()) -> plt().
-
-update(Plt, ExtraFiles0, Table0, Final0, Options) ->
-    #plt{cache = Cache0, checksums = Checksums0, mod_deps = MD0} = Plt,
-    ExtraFiles = absolute(ExtraFiles0),
-    %% Keep only valid modules.
-    Sums = [{F, compute_checksum(F)} || F <- ExtraFiles],
-    Good = lists:foldl(fun separate/2, [], Sums),
-    BadMods = [filename_to_module(B) || B <- ExtraFiles -- [F || {F,_} <- Good]],
-    Table1 = purity_utils:delete_modules(Table0, BadMods),
-    Final1 = purity_utils:delete_modules(Final0, BadMods),
-    %% Update cache.
-    Cache1 = assoc_store(cache_key(Options), postprocess(Final1), Cache0),
-    ExtraSet = sets:from_list(ExtraFiles),
-    %% Update checksums, replacing any older ones.
-    %% This could happen for instance when update was called without
-    %% checking the PLT first.
-    Checksums1 = [CS || {F, _} = CS <- Checksums0,
-        not sets:is_element(F, ExtraSet)] ++ Good,
-    %% Extract and merge reverse module dependencies.
-    MD1 = dict:merge(fun(_K, _V1, V2) -> V2 end, MD0,
-        purity_utils:rev_mod_deps(Table1)),
-    Plt#plt{table = Table1, cache = Cache1,
-            checksums = Checksums1, mod_deps = MD1}.
+%% @doc Provided a list of files, return a list of modules which depend
+%% on them and should be re-analysed.
+-spec dependent_modules(plt(), files()) -> [module()].
+dependent_modules(#plt{modules = Ms}, Filenames) ->
+    uflatten([dict_fetch(module(F), Ms, []) || F <- Filenames]).
 
 
-%% @doc Return the list of modules that need to be re-analysed,
-%% because of changed files.
--spec get_affected(plt(), changed_files()) -> [module()].
+%% @doc Update the PLT with a new table and files.
+-spec update(plt(), options(), {files(), dict(), dict()}) ->
+    {ok, plt()} | {error, inconsistent_tables}.
 
-get_affected(#plt{mod_deps = MD}, Changed) ->
-    RevDeps = [dict:find(filename_to_module(F), MD) || {_Rsn, F} <- Changed],
-    lists:usort(lists:flatten([Mods || {ok, Mods} <- RevDeps])).
-
-
-assoc_store(Key, Value, []) ->
-    [{Key, Value}];
-assoc_store(Key, Value, [{Key, _Old}|T]) ->
-    [{Key, Value}|T];
-assoc_store(Key, Value, [H|T]) ->
-    [H|assoc_store(Key, Value, T)].
-
-assoc_find(Key, List) ->
-    case lists:keyfind(Key, 1, List) of
+update(Plt, Options, {Filenames, Info, Result}) ->
+    #plt{cache = C0, checksums = CS0} = Plt,
+    case consistent(Info, Result) of
         false ->
-            error;
-        {Key, Value} ->
-            {ok, Value}
+            {error, inconsistent_tables};
+        true ->
+            AbsFiles = absolute(Filenames),
+            %% Keep track of any modules which should be removed from
+            %% the tables because they cannot be checksumed.
+            {CS1, CSErrors} = separate([{F, compute_checksum(F)} || F <- AbsFiles]),
+            ToPurge = [module(B) || B <- CSErrors],
+
+            %% Update any previous checksums with the current ones,
+            %% in case parts of the table are being re-analysed.
+            %% The analysis itself should make sure the table is
+            %% consistent with regard to such files.
+            CS = dict:to_list(dict_update(
+                    dict:from_list(CS0), dict:from_list(CS1))),
+
+            T1 = delete_modules(Info, ToPurge),
+            %% Keep only cached results which are still consistent,
+            %% and also remove any bad modules from them too.
+            C1 = assoc_store(cache_key(Options), Result,
+                             keep_consistent(C0, Info)),
+            C2 = purge_modules(C1, ToPurge),
+            {ok, Plt#plt{table = T1,
+                         cache = C2,
+                         modules = module_dependencies(T1),
+                         checksums = CS}}
     end.
 
 
-separate({F, {ok, S}}, Acc) ->
-    [{F, S}|Acc];
-separate({_, {error, Rsn}}, Acc) ->
-    purity_utils:emsg(Rsn),
-    Acc.
+purge_modules(Cache, Modules) ->
+    [{K, delete_modules(R, Modules)} || {K, R} <- Cache].
 
+keep_consistent(Cache, Info) ->
+    lists:filter(fun ({_K, Result}) -> consistent(Info, Result) end, Cache).
 
-postprocess(Table) ->
-    dict:map(fun(_K, {false,_}) -> false; (_K, V) -> V end, Table).
+%% @doc Since the analysis may add BIFs to the lookup table, just
+%% verify that Results is a superset of it.
+consistent(Info, Results) ->
+    lists:all(fun (K) -> dict:is_key(K, Results) end,
+              dict:fetch_keys(Info)).
 
-preprocess(Table) ->
-    dict:map(fun(_K, false) -> {false, <<"Cache">>}; (_K, V) -> V end, Table).
+separate(Sums) ->
+    lists:foldl(fun separate/2, {[], []}, Sums).
 
+separate({F, {ok, C}}, {Good, Bad}) ->
+    {[{F, C}|Good], Bad};
+separate({F, {error, _}}, {Good, Bad}) ->
+    {Good, [F|Bad]}.
+
+%%% Helpers %%%
+
+module(Filename) ->
+    ?utils:filename_to_module(Filename).
+
+delete_modules(Table, Modules) ->
+    ?utils:delete_modules(Table, Modules).
 
 %% @doc Produce a key from any relevant options.
 cache_key(Options) ->
@@ -295,18 +286,44 @@ relevant(_) ->
     false.
 
 
-%% @doc Return a copy of the PLT with specified files removed.
-%% Any functions from modules corresponding to those files are
-%% removed from the normal as well as the cached tables.
--spec remove_files(plt(), [file:filename()]) -> plt().
+%% @doc Reverse lookup table for inter-module dependencies, i.e.
+%% each key maps to the list of modules which depend on it.
+module_dependencies(T) ->
+    dict_map(fun sets:to_list/1, reachable(?utils:module_rmap(T))).
 
-remove_files(#plt{table = T0, cache = C0, checksums = CS0}, Files) ->
-    Mods = sets:from_list([filename_to_module(F) || F <- Files]),
-    Pred = fun({M,_,_}, _) -> not sets:is_element(M, Mods); (_, _) -> true end,
-    T1 = dict:filter(Pred, T0),
-    FS = sets:from_list(Files),
-    #plt{table = T1,
-         cache = [{K, dict:filter(Pred, C)} || {K, C} <- C0],
-         mod_deps = purity_utils:rev_mod_deps(T1),
-         checksums = [CS || {F, _C} = CS <- CS0, not sets:is_element(F, FS)]}.
+reachable(Map) ->
+    dict_map(fun (Fs) -> reachable(Fs, Map, sets:from_list(Fs)) end, Map).
+
+reachable([], _Map, S) -> S;
+reachable([K|Ks], Map, S) ->
+    case [D || D <- dict_fetch(K, Map, []), not sets:is_element(D, S)] of
+        [] -> reachable(Ks, Map, S);
+        Ds -> reachable(Ks, Map, reachable(Ds, Map, add_elements(Ds, S)))
+    end.
+
+add_elements(Es, S) ->
+    lists:foldl(fun sets:add_element/2, S, Es).
+
+
+%% @doc Refer to filename:absname/1 for limitations of this approach.
+absolute(Filenames) ->
+    [filename:absname(F) || F <- Filenames].
+
+
+%% @doc Consistent dict-like interface for handling association lists.
+assoc_find(Key, List) ->
+    case lists:keyfind(Key, 1, List) of
+        false ->
+            error;
+        {Key, Value} ->
+            {ok, Value}
+    end.
+
+assoc_store(Key, Value, []) ->
+    [{Key, Value}];
+assoc_store(Key, Value, [{Key, _Old}|T]) ->
+    [{Key, Value}|T];
+assoc_store(Key, Value, [H|T]) ->
+    [H|assoc_store(Key, Value, T)].
+
 

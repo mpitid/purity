@@ -33,9 +33,9 @@
 
 -module(purity).
 
--define(utils, purity_utils_new).
+-define(utils, purity_utils).
 -define(bifs, purity_bifs).
--define(plt, purity_plt_new).
+-define(plt, purity_plt).
 
 -export([module/2]).
 -export([module/3, modules/3]).

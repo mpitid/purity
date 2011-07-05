@@ -25,14 +25,24 @@
 
 -module(purity_stats).
 
+-define(utils, purity_utils).
+
 -export([gather/2, write/2]).
 
 -export_type([stats/0]).
 
--record(stats, {p = 0,   % Pure
-                i = 0,   % Impure
-                u = 0,   % Undefined
-                l = 0}). % Limited by analysis
+-record(stats, {p = 0, e = 0, d = 0, s = 0,
+                h = 0,
+                l = 0,
+                u = 0}).
+
+-define(FIELDS, [#stats.p, #stats.e, #stats.d, #stats.s,
+                 #stats.h, #stats.l, #stats.u]).
+
+-define(HEADERS, ["pure", "exceptions", "depedent", "effects",
+                  "hofs", "limited", "undefined"]).
+
+-define(FLEN, "~10").
 
 -type stats() :: #stats{}.
 -type mod_stats() :: {module(), stats()}.
@@ -44,18 +54,8 @@ gather(Modules, Table) ->
     Ms = sets:from_list(Modules),
     Vs = [Val || {{M,_,_}, _} = Val <- dict:to_list(Table),
         sets:is_element(M, Ms)],
-    St0 = lists:foldl(fun update_stats/2, dict:new(), Vs),
-    Inc = get_inconclusive(Ms, Table),
-    St1 = dict:map(
-        fun(M, #stats{u = U, l = L} = S) ->
-                case dict:find(M, Inc) of
-                    {ok, N} ->
-                        S#stats{u = U + N, l = L - N};
-                    error ->
-                        S
-                end end,
-        St0),
-    sort(dict:to_list(St1)).
+    sort(dict:to_list(
+            lists:foldl(fun update_stats/2, dict:new(), Vs) )).
 
 
 %% @doc Write an assoc list of modules and statistics to file.
@@ -64,83 +64,73 @@ gather(Modules, Table) ->
 write(Filename, Stats) ->
     case file:open(Filename, [write]) of
         {ok, Io} ->
-            io:format(Io, "# Pure\tImpure\tUndefined  Limited"
-                          " %Pure  Module~n", []),
-            lists:foreach(fun(S) -> print(Io, S) end, Stats),
-            #stats{p = P, i = I, u = U, l = L} = St = sum(Stats),
-            T = total(St),
-            io:format(Io, "# Aggregate: pure ~.1f impure ~.1f undefined ~.1f "
-                          "limit ~.1f modules ~b functions ~b",
-                          [percent(P, T), percent(I, T), percent(U, T),
-                              percent(L, T), length(Stats), T]),
+            write_stats(Io, Stats),
             file:close(Io);
         {error, Reason} ->
             io:format("ERROR opening stats file ~p: ~p~n", [Filename, Reason])
     end.
 
+write_stats(Io, Stats) ->
+    io:format(Io, join(" ", [?FLEN++"s" || _ <- ?HEADERS]) ++ "~n", ?HEADERS),
+    lists:foreach(fun(S) -> format(Io, S) end, Stats),
+    {_Ms, Ss} = lists:unzip(Stats),
+    Sum = sum(Ss),
+    Fmt = join(" ", [?utils:str("~s ~~.1f", [H]) || H <- ?HEADERS]),
+    Vals = [percent(F, Sum) || F <- ?FIELDS],
+    io:format(Io,
+              "# Aggregate: " ++ Fmt ++ " modules ~b functions ~b~n",
+              Vals ++ [length(Stats), total(Sum)]).
+
+format(IoDev, {M, #stats{} = S}) ->
+    Fmt = join(" ", [?FLEN++"b" || _ <- ?FIELDS]),
+    Vals = [element(F, S) || F <- ?FIELDS],
+    io:format(IoDev, Fmt ++ " ~5.1f ~p~n", Vals ++ [percent(S), M]).
+
+sum(StatList) ->
+    lists:foldl(fun add_stats/2, #stats{}, StatList).
+
+add_stats(#stats{}=S1, #stats{}=S2) ->
+    lists:foldl(
+        fun(Field, S) ->
+                setelement(Field, S, element(Field, S1) + element(Field, S2)) end,
+        #stats{}, ?FIELDS).
+
 
 update_stats({{M,_,_} = MFA, Val}, Dict) ->
-    case purity_utils:internal_function(MFA) of
+    case ?utils:internal_function(MFA) of
         true -> % Ignore internal functions.
             Dict;
         false ->
-            F = fun(#stats{} = S) -> incr(Val, S) end,
-            dict:update(M, F, incr(Val, #stats{}), Dict)
+            F = fun(#stats{} = S) -> match(Val, S) end,
+            I = match(Val, #stats{}),
+            dict:update(M, F, I, Dict)
     end.
 
-incr(true, #stats{p = Pure} = S) ->
-    S#stats{p = Pure + 1};
-incr({false, _}, #stats{i = Impure} = S) ->
-    S#stats{i = Impure + 1};
-incr(false, #stats{i = Impure} = S) ->
-    S#stats{i = Impure + 1};
-incr(undefined, #stats{u = U} = S) ->
-    S#stats{u = U + 1};
-incr(Ctx, #stats{u = U, l = L} = S) when is_list(Ctx) ->
-    case lists:all(fun({arg,_}) -> true; (_) -> false end, Ctx) of
+
+match({{at_least, _}, []}, S) ->
+    incr(#stats.l, S);
+
+match({P, []}, S) ->
+    match_aux(P, S);
+
+match({_, D}, S) ->
+    case is_hof(D) of
         true ->
-            S#stats{u = U + 1};
+            incr(#stats.h, S);
         false ->
-            S#stats{l = L + 1}
+            incr(#stats.u, S)
     end.
 
-%% @doc Return a dict mapping each module to the number of inconclusive
-%% functions it contains.
-get_inconclusive(Modules, Table) ->
-    RevDeps = purity_utils:rev_deps(Table),
-    Funs = [F || {M,_,_} = F <- sets:to_list(get_undef(RevDeps, Table)),
-        sets:is_element(M, Modules)],
-    lists:foldl(
-        fun({M,_,_}, D) -> dict:update_counter(M, 1, D) end, dict:new(), Funs).
+match_aux(p, S) -> incr(#stats.p, S);
+match_aux(e, S) -> incr(#stats.e, S);
+match_aux(d, S) -> incr(#stats.d, S);
+match_aux(s, S) -> incr(#stats.s, S).
 
-%% @doc Return the set of functions with missing or undefined dependencies.
-get_undef(Deps, Table) ->
-    get_undef(Deps, get_undefined_or_missing(Table), sets:new()).
+incr(Field, #stats{} = S) ->
+    setelement(Field, S, 1 + element(Field, S)).
 
-get_undef(_, [], Set) ->
-    Set;
-get_undef(Deps, Funs0, Set0) ->
-    Funs1 = lists:usort(lists:flatten(
-            [R || {ok, R} <- [dict:find(F, Deps) || F <- Funs0]])),
-    Funs2 = [F || F <- Funs1, not sets:is_element(F, Set0)],
-    Set1 = lists:foldl(fun sets:add_element/2, Set0, Funs2),
-    get_undef(Deps, Funs2, Set1).
-
-get_undefined_or_missing(Table) ->
-    {Missing, _Prims} = purity:find_missing(Table),
-    Undef = [Fun || {Fun, undefined} <- dict:to_list(Table)],
-    Missing ++ Undef.
-
-
-print(IoDev, {M, #stats{p = P, i = I, u = U, l = L} = S}) ->
-    io:format(IoDev, "~7b ~7b ~7b ~7b ~8.1f  ~p~n", [P, I, U, L, percent(S), M]).
-
-sum(Stats) ->
-    lists:foldl(fun({_M, S}, T) -> sum(S, T) end, #stats{}, Stats).
-
-sum(#stats{p = P1, i = I1, u = U1, l = L1},
-    #stats{p = P2, i = I2, u = U2, l = L2} = Acc) ->
-    Acc#stats{p = P1 + P2, i = I1 + I2, u = U1 + U2, l = L1 + L2}.
+is_hof(D) ->
+    [] =/= [A || {arg,A} <- D].
 
 
 -spec sort([mod_stats()]) -> [mod_stats()].
@@ -151,14 +141,20 @@ sort(Stats) ->
 compare({_, S1}, {_, S2}) ->
     percent(S1) =< percent(S2).
 
-percent(#stats{p = P} = S) ->
-    percent(P, total(S)).
+percent(#stats{} = S) ->
+    percent(#stats.p, S).
 
-percent(_Value, Total) when Total == 0 ->
-    0.0;
-percent(Value, Total) ->
-    (100 * Value) / Total.
+percent(Field, S) ->
+    case total(S) of
+        0 -> 0.0;
+        T -> (100 * element(Field, S)) / T
+    end.
 
-total(#stats{p = P, i = I, u = U, l = L}) ->
-    P + I + U + L.
+total(#stats{} = S) ->
+    lists:foldl(
+        fun(Field, Sum) -> Sum + element(Field, S) end,
+        0, ?FIELDS).
+
+join(Sep, Strings) ->
+    string:join(Strings, Sep).
 

@@ -28,8 +28,8 @@
 -export([main/0]).
 
 
--define(plt, purity_plt_new).
--define(utils, purity_utils_new).
+-define(plt, purity_plt).
+-define(utils, purity_utils).
 
 -import(?utils, [fmt_mfa/1, str/2]).
 
@@ -133,8 +133,8 @@ main() ->
 
 do_stats(Filename, Modules, Table) ->
     ok = timeit("Generating statistics",
-        fun() -> stats:write(Filename,
-                    stats:gather(Modules, Table)) end).
+        fun() -> purity_stats:write(Filename,
+                    purity_stats:gather(Modules, Table)) end).
 
 do_analysis(Files, Options, Initial) ->
     Table = timeit("Traversing AST", fun() ->
