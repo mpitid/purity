@@ -77,10 +77,13 @@
 %% {erlang,error,1}, {erlang,throw,1}, {erlang,exit,1}
 %% {match_fail,1}, {raise,2}
 
--type deplist() :: ?utils:deplist().
--type argument() :: ?utils:argument().
--type dependency() :: ?utils:dependency().
+-type options()      :: purity_utils:options().
+-type deplist()      :: purity_utils:deplist().
+%-type argument()     :: purity_utils:argument().
+-type dependency()   :: purity_utils:dependency().
+-type purity_level() :: purity_utils:purity_level().
 
+-type plt() :: purity_plt:plt().
 
 -type map_key() :: cerl:var_name().
 -type map_val() :: mfa() | pos_integer().
@@ -88,7 +91,7 @@
 
 -type sub() :: {dict(), dict()}.
 
--type pure() :: {?utils:purity(), ?utils:deplist()}.
+-type pure() :: {purity_utils:purity(), purity_utils:deplist()}.
 
 
 %% @doc Simple purity test, only distinguishes between pure and impure.
@@ -111,7 +114,7 @@ is_pure({_,_,_} = MFA, Table) ->
 %% @see is_pure/2
 %% @see module/3
 %% @see propagate/2
--spec module(cerl:c_module(), ?utils:options()) -> dict().
+-spec module(cerl:c_module(), options()) -> dict().
 
 module(Core, Options) ->
     Plt = load_plt_silent(Options),
@@ -122,7 +125,7 @@ module(Core, Options) ->
 
 %% @doc Load a PLT from the provided options. If no PLT is found, or
 %% there are errors, return a new PLT.
--spec load_plt_silent(?utils:options()) -> ?plt:plt().
+-spec load_plt_silent(options()) -> plt().
 load_plt_silent(Opts) ->
     File = option(plt, Opts, ?plt:default_path()),
     Check = not option(no_check, Opts, false),
@@ -180,7 +183,7 @@ load_plt_silent(Opts) ->
 %% @doc Return a list of MFAs and a list of primops for which we have no
 %% pureness information.
 
--spec find_missing(dict()) -> {[mfa()], [?utils:primop()]}.
+-spec find_missing(dict()) -> {[mfa()], [purity_utils:primop()]}.
 
 find_missing(Table) ->
     Set1 = ordsets:from_list(collect_function_deps(Table)),
@@ -222,7 +225,7 @@ is_bif(Fun) ->
 %% changed files, as well as any dependencies thereof.
 
 -spec analyse_changed({[file:filename()], [file:filename()]},
-                      ?utils:options(), ?plt:plt()) -> ?plt:plt().
+                      options(), plt()) -> plt().
 
 analyse_changed({Changed, Errors}, Options, Plt) ->
     Combined = Changed ++ Errors,
@@ -252,7 +255,7 @@ to_modules(Filenames) ->
 %%
 %% @see modules/3
 
--spec module(cerl:c_module(), ?utils:options(), dict()) -> dict().
+-spec module(cerl:c_module(), options(), dict()) -> dict().
 
 module(Core, Options, Tab0) ->
     Module = cerl:concrete(cerl:module_name(Core)),
@@ -279,7 +282,7 @@ module(Core, Options, Tab0) ->
 %%
 %% @see module/3
 
--spec modules([string()], ?utils:options(), dict()) -> dict().
+-spec modules([string()], options(), dict()) -> dict().
 
 modules(Modules, Options, Tab0) when is_list(Modules) ->
     lists:foldl(
@@ -301,7 +304,7 @@ modules(Modules, Options, Tab0) when is_list(Modules) ->
 %% @see module/3
 %% @see modules/3
 
--spec pmodules([file:filename()], ?utils:options(), dict()) -> dict().
+-spec pmodules([file:filename()], options(), dict()) -> dict().
 
 pmodules(Modules, Options, Tab0) when is_list(Modules) ->
     CPUs = erlang:system_info(logical_processors),
@@ -335,7 +338,7 @@ ungroup(Tab) ->
               dict:new(), Tab).
 
 
--spec panalyse(file:filename(), ?utils:options()) -> dict().
+-spec panalyse(file:filename(), options()) -> dict().
 
 panalyse(Filename, Options) ->
     Tab = dict:new(),
@@ -987,7 +990,7 @@ sub_new() -> {dict:new(), dict:new()}.
 %% @see propagate_purity/2
 %% @see propagate_termination/2
 
--spec propagate(dict(), ?utils:options()) -> dict().
+-spec propagate(dict(), options()) -> dict().
 
 propagate(Tab, Opts) ->
     case option(both, Opts) of
@@ -1058,7 +1061,7 @@ unzipN(N, Items) ->
 initialise(Table) ->
     ?utils:dict_map(fun initial_purity/1, Table).
 
--spec initial_purity(?utils:deplist()) -> pure() ; (P) -> P when P :: pure().
+-spec initial_purity(deplist()) -> pure() ; (P) -> P when P :: pure().
 %% Initialise info tables to pure.
 initial_purity(DL) when is_list(DL) ->
     {p, DL};
@@ -1069,7 +1072,7 @@ initial_purity({_P, DL} = V) when is_list(DL) ->
 
 %%% Pureness values have a well defined ordering: s > d > e > p
 %% @doc Implement the ordering relation of purity values.
--spec sup(?utils:purity_level(), ?utils:purity_level()) -> ?utils:purity_level().
+-spec sup(purity_level(), purity_level()) -> purity_level().
 sup(e, p) -> e;
 sup(d, p) -> d;
 sup(d, e) -> d;
@@ -1077,11 +1080,11 @@ sup(s, _) -> s;
 sup(A, A) when is_atom(A) -> A;
 sup(A, B) when is_atom(A), is_atom(B) -> sup(B, A).
 
--spec sup([?utils:purity_level()]) -> ?utils:purity_level().
+-spec sup([purity_level()]) -> purity_level().
 sup(Values) when is_list(Values) ->
     lists:foldl(fun sup/2, p, Values).
 
--spec propagate_purity(dict(), ?utils:options()) -> dict().
+-spec propagate_purity(dict(), options()) -> dict().
 
 propagate_purity(Tab, _Opts) ->
     %% These functions work on previous types of values.
@@ -1635,7 +1638,7 @@ with_graph(Graph, Function) ->
 
 
 %% Convert values to the true/false for comparison with the previous algorith.
--spec convert(dict(), ?utils:options()) -> dict().
+-spec convert(dict(), options()) -> dict().
 convert(Tab, Opts) ->
     Map = dict:from_list(
       case option(purelevel, Opts, 1) of
@@ -1657,7 +1660,7 @@ convert(Tab, Opts) ->
 %% values, since there can be only two states, terminating (pure) or
 %% non-terminating (equivalent to the maximal value of `side-effect').
 
--spec propagate_termination(dict(), ?utils:options()) -> dict().
+-spec propagate_termination(dict(), options()) -> dict().
 
 propagate_termination(Tab, _Opts) ->
     T1 = add_predefined_termination(initialise(Tab)),
@@ -1733,7 +1736,7 @@ intersection([S|Sets]) ->
 
 
 
--spec propagate_both(dict(), ?utils:options()) -> dict().
+-spec propagate_both(dict(), options()) -> dict().
 propagate_both(Tab, Opts) ->
     Tp = propagate_purity(Tab, Opts),
     Tt = propagate_termination(Tab, Opts),

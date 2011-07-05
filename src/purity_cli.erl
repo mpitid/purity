@@ -257,8 +257,6 @@ option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
 
 
--spec pretty_print(fun((_,_) -> _), {?utils:emfa(), purity:pure()}) -> _.
-
 pretty_print(Print, {MFA, Result}) ->
     Print("~s ~s.~n", [fmt_mfa(MFA), fmt(Result)]).
 

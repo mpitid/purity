@@ -55,7 +55,7 @@
 
 %% Some type shortcuts.
 -type files() :: [file:filename()].
--type options() :: ?utils:options().
+-type options() :: purity_utils:options().
 -type file_checksum() :: {file:filename(), binary()}.
 
 
