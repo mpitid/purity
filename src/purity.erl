@@ -24,6 +24,7 @@
 %%%
 
 % FIXME:
+% - Add separate predefined values for termination.
 % - Characterise higher order function arguments as remote/local.
 
 % TODO
@@ -1121,8 +1122,27 @@ add_predefined_purity(Tab) ->
 
 add_predefined_termination(Tab) ->
     %% All BIFs are considered terminating.
-    dict_store(?PREDEF_T,
-        dict_store(collect_bif_dependencies(Tab), {p, []}, Tab)).
+    %% Except HOFs and any ones marked as unknown.
+    BIFs = [{B, rectify(?bifs:is_pure(B))} || B <- collect_bif_dependencies(Tab)],
+    dict_store(?PREDEF_T, dict_store(BIFs, Tab)).
+
+%% This is based on the following assumptions about BIFs (and cheats):
+%% - Values with a deplist are either HOFs or depend on some other BIF,
+%%   so they should be preserved.
+%% - Anything marked unknown is most likely unknown termination-wise as
+%%   well, so that is preserved too. This is currently only used in
+%%   erlang:apply/3, where there is insufficient information to determine
+%%   the purity or termination of the function statically.
+%% - Any other value should be marked terminating, as BIFs are guaranteed
+%%   to terminate (in theory at least).
+%%   XXX: It is still possible for a BIF or a cheat to wait indefinitely
+%%   for some reason, e.g. port communication, waiting on a message, etc.
+%%   There should be separate termination values for such BIFs. TODO
+
+rectify({{at_least, _}, DL}) when is_list(DL) ->
+    {{at_least, p}, DL};
+rectify({_, DL}) when is_list(DL) ->
+    {p, DL}.
 
 
 %% @doc Build the initial working set, consisting of any values with empty
