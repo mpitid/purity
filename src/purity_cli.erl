@@ -186,8 +186,7 @@ parse_args() ->
         {purelevel, [
                 "-l", "--level",
                 {type, {intchoice, [1,2,3]}},
-                {default, 1},
-                {help, "Select one of three progressively stricter purity levels [default: 1]"}]},
+                {help, "Select one of three progressively stricter purity levels"}]},
         {with_reasons, [
                 "--with-reasons",
                 {type, bool},

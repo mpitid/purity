@@ -47,7 +47,7 @@
          find_missing/1]).
 -export([analyse_changed/3]).
 
--export([purity_of/2, convert/2]).
+-export([purity_of/2]).
 
 
 -import(?utils, [dict_cons/3, dict_mapfold/3,
@@ -1099,7 +1099,7 @@ propagate_purity(Tab, _Opts) ->
     T2 = converge_contaminate(S1#s{ ws = initial_workset(S1#s.tab) }),
     S2 = postprocess(S1#s{tab = T2}),
 
-    S2#s.tab.
+    map_to_level(S2#s.tab, _Opts).
 
 
 %% Update table with the values of any necessary BIFs as well
@@ -1637,21 +1637,27 @@ with_graph(Graph, Function) ->
     Result.
 
 
-%% Convert values to the true/false for comparison with the previous algorith.
--spec convert(dict(), options()) -> dict().
-convert(Tab, Opts) ->
-    Map = dict:from_list(
-      case option(purelevel, Opts, 1) of
-        1 -> [{p, true}, {e, true}, {d, true}, {s, false}];
-        2 -> [{p, true}, {e, true}, {d, false}, {s, false}];
-        3 -> [{p, true}, {e, false}, {d, false}, {s, false}]
-      end),
-    dict:map(
-        fun(_, {{at_least,P}, []}) -> [P];
-           (_, {{at_least,_P}, D}) -> D;
-           (_, {P, []}) -> dict:fetch(P, Map);
-           (_, {P, D}) -> [P|D] end,
-        Tab).
+map_to_level(Tab, Opts) ->
+    case option(purelevel, Opts, none) of
+        1 -> convert(Tab, []);
+        2 -> convert(Tab, [d]);
+        3 -> convert(Tab, [e, d]);
+        none -> Tab
+    end.
+
+convert(Tab, Values) ->
+    ?utils:dict_map(fun (V) -> map_purity(V, Values) end, Tab).
+
+map_purity({{at_least, P}, DL}, Values) ->
+    case lists:member(P, Values) of
+        true -> {s, []};
+        false -> {{at_least, p}, DL}
+    end;
+map_purity({P, DL}, Values) ->
+    case lists:member(P, Values) of
+        true -> {s, []};
+        false -> {p, DL}
+    end.
 
 
 %%% Termination analysis with the new algorithm. %%%
