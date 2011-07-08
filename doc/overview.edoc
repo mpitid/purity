@@ -4,7 +4,7 @@
      Purity overview page
 
 @author Michael Pitidis
-@copyright 2009-2010 Michael Pitidis, Kostis Sagonas
+@copyright 2009-2011 Michael Pitidis, Kostis Sagonas
 @version {@version} (purity {@vsn})
 @title Purity - a lightweight side-effect analyser for Erlang programs
 

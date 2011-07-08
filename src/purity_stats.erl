@@ -14,7 +14,7 @@
 %% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 %% 02110-1301 USA
 %%
-%% @copyright 2009-2010 Michael Pitidis, Kostis Sagonas
+%% @copyright 2009-2011 Michael Pitidis, Kostis Sagonas
 %% @author Michael Pitidis <mpitid@gmail.com>
 %% @end
 %% =====================================================================
