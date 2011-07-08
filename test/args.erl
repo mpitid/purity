@@ -2,7 +2,7 @@
 -module(args).
 -compile(export_all).
 
-%< f1/1 [{arg,1}]
+%< f1/1 e [1]
 f1(Arg) ->
     case Arg of
         [] ->
@@ -15,8 +15,10 @@ f1(Arg) ->
 
 % This is depends instead of pure, since we can't resolve the
 % first two calls to f1, because they don't have a callable argument.
-%< f2/0 [{local,{args,f1,1},[]}]
+%% f2/0 [{local,{args,f1,1},[]}]
+%< f2/0 >= e
 f2() ->
     f1([]),
     f1(2),
     f1(fun abs/1).
+

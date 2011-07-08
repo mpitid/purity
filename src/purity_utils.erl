@@ -14,7 +14,7 @@
 %% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 %% 02110-1301 USA
 %%
-%% @copyright 2009-2010 Michael Pitidis, Kostis Sagonas
+%% @copyright 2009-2011 Michael Pitidis, Kostis Sagonas
 %% @author Michael Pitidis <mpitid@gmail.com>
 %% @end
 %% =====================================================================
@@ -25,177 +25,296 @@
 
 -module(purity_utils).
 
--export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
--export([str/2, fmt_mfa/1]).
--export([filename_to_module/1, delete_modules/2]).
+-export([dependencies/3, module_rmap/1, function_rmap/1]).
+
+-export([is_mfa/1, is_primop/1, is_expr/1]).
+
+-export([delete_modules/2]).
+
+-export([dict_map/2, dict_fold/2, dict_mapfold/3, dict_cons/3]).
+-export([dict_store/2, dict_store/3, dict_fetch/3, dict_update/2]).
+
+-export([uflatten/1, str/2, fmt_mfa/1, filename_to_module/1]).
+
 -export([internal_function/1]).
--export([rev_deps/1, rev_mod_deps/1]).
--export([collect_dependencies/1, is_concrete_fun/1, is_primop/1]).
--export([dict_cons/3]).
 
--export([remove_args/1]).
--export([count/1]).
-
--export([pmap/4]).
 -export([emsg/1, emsg/2]).
 
--export_type([emfa/0, primop/0, options/0]).
+-export([pmap/4]).
+
+-export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
 
 
-%% @doc Remove argument annotations from any context values.
--spec remove_args(any()) -> any().
-remove_args(Ctx) when is_list(Ctx) ->
-    %% usort to remove any duplicate dependencies after cleanup.
-    lists:usort([remove_arg(C) || C <- Ctx]);
-remove_args(Val) ->
-    Val.
-
-remove_arg({Type, MFA, Args}) ->
-    {Type, MFA, lists:filter(fun is_not_arg/1, Args)};
-remove_arg({free, {Var, Args}}) ->
-    {free, {Var, lists:filter(fun is_not_arg/1, Args)}};
-remove_arg(Val) ->
-    Val.
-
-is_not_arg({arg, _}) ->
-    false;
-is_not_arg(_) ->
-    true.
+-export_type([options/0, purity/0, purity_level/0, primop/0, emfa/0]).
+-export_type([dependency/0, deplist/0, argument/0]).
 
 
-%% Extended MFA, with support for variable modules/functions.
--type emfa()    :: {module() | {var, atom()}, atom() | {var, atom()}, arity()}.
--type primop()  :: {atom(), arity()}.
+-ifdef(TEST).
+-include("purity_utils_tests.hrl").
+-endif.
+
+
+%% The type for options relevant to the analysis.
 
 -type options() :: [atom() | {atom(), any()}].
 
+%% The level of purity a function can have.
+%% - p Referrentialy transparent.
+%% - e May raise exceptions.
+%% - d Dependent on the execution environment.
+%% - s Has side-effects.
+%% In the case of termination analysis, only two of the levels are used:
+%% - p Terminating
+%% - s Non-terminating
+-type purity_level() :: p | e | d | s.
 
-%% @doc Return a mapping of modules to a list of modules that
-%% may have dependencies on them.
+-type purity() :: purity_level() | {at_least, purity_level()}.
 
--spec rev_mod_deps(dict()) -> dict().
+%% The value of the lookup table.
+-type tab_value() :: deplist()              %% Info table.
+                   | {purity(), deplist()}. %% Result table.
 
-rev_mod_deps(Table) ->
-    dict:map(
-        fun(_K, Mods) -> lists:usort(Mods) end,
-        dict:fold(fun rev_mod_deps/3, dict:new(), Table)).
+-type deplist() :: [dependency()].
 
-rev_mod_deps({M,_,_}, Val, Deps) ->
+-type dependency() :: {arg, pos_integer()} %% Higher order dependency on argument.
+                    | {remote, emfa(), [argument()]}
+                    | {local, mfa() | atom(), [argument()]}
+                    | {free, atom(), [argument()]} %% Free variable.
+                    | {primop, primop(), [argument()]}
+                    | {erl, 'catch' | {'receive', finite|infinite}}. %% Erlang expression.
+
+-type argument() :: {pos_integer(), mfa()} %% Concrete argument passed as argument.
+                  %% The positions of an argument passed on to another call.
+                  %% Used for tracking indirect higher order functions.
+                  | {arg, {pos_integer(), pos_integer()}}
+                  %% Track arguments which were passed "reduced" in a recursive call.
+                  %% Used in termination analysis to detect terminating recursive functions.
+                  | {sub, pos_integer()}.
+
+-type emfa()   :: {module()|{var, atom()}, atom()|{var, atom()}, arity()}.
+-type primop() :: {atom(), arity()}.
+
+
+-spec module_rmap(dict()) -> dict().
+module_rmap(Tab) ->
+    dict:map(fun remove_self/2, dict_fold(fun module_rmap/3, Tab)).
+
+module_rmap({M,_,_}, DL, Ms) ->
     lists:foldl(
-        fun({K,_,_}, D) -> dict_cons(K, M, D) end,
-        Deps,
-        [F || F <- collect_dependencies(Val), is_concrete_fun(F)]);
-rev_mod_deps(_NonMFA, _Val, Deps) ->
-    Deps.
+        fun ({K,_,_}, Mn) -> dict_cons(K, M, Mn) end,
+        Ms, dependencies(DL, fun is_mfa/1, true));
+module_rmap(_, _, Ms) -> Ms.
+
+remove_self(M, Rs) ->
+    ordsets:del_element(M, ordsets:from_list(Rs)).
 
 
-%% @doc Return a mapping of functions or primops to a list of
-%% functions their purity depends on.
--spec rev_deps(dict()) -> dict().
+-spec function_rmap(dict()) -> dict().
+function_rmap(Tab) ->
+    dict_map(fun lists:usort/1, dict_fold(fun function_rmap/3, Tab)).
 
-rev_deps(Table) ->
-    dict:map(
-        fun(_Key, Vals) -> lists:usort(Vals) end,
-        dict:fold(fun rev_deps/3, dict:new(), Table)).
+function_rmap(F, {_P, DL}, Rs) ->
+    lists:foldl(
+        fun (D, Rn) -> dict_cons(D, F, Rn) end,
+        Rs, dependencies(DL, fun common_dependencies/1, false)).
 
-rev_deps(Key, Val, Deps) when is_list(Val) ->
-    %% Only collect dependencies of concrete MFAs and erlang
-    %% expressions like `catch' and `receive'. The latter
-    %% should only have special dependencies.
-    case is_mfa(Key) orelse is_primop(Key) orelse is_expr(Key) of
+
+-spec dependencies(tab_value(), fun((term()) -> boolean()), boolean()) -> [term()].
+dependencies({_P, DepList}, Filter, Higher) when is_list(DepList) ->
+    %% Handle the two different lookup tables transparently.
+    dependencies(DepList, Filter, Higher);
+dependencies(DepList, Filter, Higher) when is_list(DepList) ->
+    L1 = [F || {_type, F, _As} <- DepList, Filter(F)] ++
+         [E || E <- DepList, is_expr(E), Filter(E)],
+    case Higher of
         true ->
-            lists:foldl(
-                fun(Dep, D) -> dict_cons(Dep, Key, D) end,
-                Deps,
-                %% Don't collect dependencies from arguments, they
-                %% should be handled by call-site analysis instead.
-                [F || F <- collect_dependencies(Val, false),
-                    is_mfa(F) orelse is_expr(F) orelse
-                    is_primop(F) orelse is_special(F)]);
-        false ->
-            Deps
-    end;
-rev_deps(_NonMFA, _orNonCtx, Deps) ->
-    Deps.
+            L2 = [F || {_type, _f, As} <- DepList,
+                  {N, F} <- As, is_integer(N), Filter(F)],
+            lists:reverse(L2, L1); % rev append
+        false -> L1
+    end.
 
 
-%% @doc Return a list of functions, variables or primops,
-%% that appear on the context list.
--spec collect_dependencies([term()]) -> [emfa() | primop()].
+common_dependencies(D) ->
+    is_mfa(D) orelse is_primop(D) orelse is_expr(D).
 
-collect_dependencies(Val) ->
-    collect_dependencies(Val, true).
-
-collect_dependencies(Val, All) when is_list(Val) ->
-    L1 = [Fun || {_Type, Fun, _Args} <- Val]
-      ++ [S || S <- Val, is_special(S) orelse is_expr(S)],
-    case All of
-        false ->
-            L1;
-        true ->
-            %% Collect functions that occur in the argument list as well.
-            L2 = [Fun || {_Type, _Fun, Args} <- Val, {_, Fun} <- Args],
-            lists:reverse(L2, L1)
-    end;
-collect_dependencies(_NonCtx, _) ->
-    [].
-
+%% Dependency filters.
 
 -spec is_mfa(term()) -> boolean().
-
 is_mfa({M,F,A}) when is_atom(M), is_atom(F), A >= 0, A =< 255 ->
     true;
 is_mfa(_) ->
     false.
 
--spec is_expr(term()) -> boolean().
-
-is_expr({erl, _Expr}) ->
-    true;
-is_expr(_) ->
-    false.
-
--spec is_concrete_fun(term()) -> boolean().
-
-is_concrete_fun({M, F, _}) when is_atom(M), is_atom(F) ->
-    true;
-is_concrete_fun(_) ->
-    false.
-
 -spec is_primop(term()) -> boolean().
-
-is_primop({P, A}) when is_atom(P), is_integer(A), A >= 0 ->
+is_primop({P, A}) when is_atom(P), A >= 0, A =< 255 ->
     true;
 is_primop(_) ->
     false.
 
--spec is_special(term()) -> boolean().
-
-is_special(side_effects) ->
+-spec is_expr(term()) -> boolean().
+is_expr({erl, _}) ->
     true;
-is_special(non_determinism) ->
-    true;
-is_special(exceptions) ->
-    true;
-is_special(_) ->
+is_expr(_) ->
     false.
 
 
-%% Faster than dict:append, in case order is not important.
+%% @doc Remove any functions belonging to Modules from the Table.
 
--spec dict_cons(term(), term(), dict()) -> dict().
+-spec delete_modules(D, [module()]) -> D when D :: dict().
 
-dict_cons(Key, Val, Dict) ->
-    dict:update(Key, fun(Old) -> [Val|Old] end, [Val], Dict).
+delete_modules(Table, []) ->
+    Table;
+delete_modules(Table, Modules) ->
+    S = sets:from_list(Modules),
+    dict:filter(
+        fun({M,_,_}, _V) -> not sets:is_element(M, S); (_K, _V) -> true end,
+        Table).
+
+
+%%% Dict related helpers. %%%
+
+-spec dict_map(fun((Value) -> Value), D) -> D when D :: dict().
+dict_map(Fun, Dict) -> dict:map(fun (_K, V) -> Fun(V) end, Dict).
+
+-spec dict_fold(fun((term(), term(), Acc) -> Acc), dict()) -> Acc when Acc :: dict().
+dict_fold(Fun, Dict) -> dict:fold(Fun, dict:new(), Dict).
+
+-spec dict_cons(term(), term(), D) -> D when D :: dict().
+dict_cons(Key, Value, Dict) ->
+    dict:update(Key, fun (Previous) -> [Value|Previous] end, [Value], Dict).
+
+-spec dict_fetch(term(), dict(), term()) -> term().
+dict_fetch(Key, Dict, Default) ->
+    case dict:find(Key, Dict) of
+        {ok, Value} -> Value;
+        error -> Default
+    end.
+
+-spec dict_update(dict(), dict()) -> dict().
+dict_update(Dict1, Dict2) ->
+    dict:merge(fun (_K, _V1, V2) -> V2 end, Dict1, Dict2).
+
+
+%% @doc Not as efficient as a native implementation would be,
+%% but usefull all the same.
+-spec dict_mapfold(fun((term(), Value, Acc) -> {Value, Acc}), Acc, dict()) -> {dict(), Acc}.
+dict_mapfold(Fun, Acc0, Dict) ->
+    dict:fold(
+        fun(K, V1, {Map, Acc1}) ->
+                {V2, Acc2} = Fun(K, V1, Acc1),
+                {dict:store(K, V2, Map), Acc2} end,
+        {dict:new(), Acc0}, Dict).
+
+
+%% @doc Update a dict with a list of key-value pairs.
+-spec dict_store([{term(),term()}], dict()) -> dict().
+dict_store(KeyVals, Dict) ->
+    lists:foldl(fun ({K, V}, D) -> dict:store(K, V, D) end, Dict, KeyVals).
+
+%% @doc Update a list of keys with the same value in a dictionary.
+-spec dict_store([term()], term(), dict()) -> dict().
+dict_store(Keys, Value, Dict) ->
+    lists:foldl(fun (K, D) -> dict:store(K, Value, D) end, Dict, Keys).
+
+
+%%% Miscellaneous functions %%%
+
+-spec uflatten([term()]) -> [term()].
+uflatten(List) ->
+    lists:usort(lists:flatten(List)).
+
+
+-spec str(string(), [term()]) -> string().
+str(Fmt, Args) ->
+    lists:flatten(io_lib:format(Fmt, Args)).
+
+
+-spec fmt_mfa(emfa() | primop()) -> string().
+fmt_mfa({M, F, A}) -> % emfa
+    str("~p:~p/~b", [M, F, A]);
+fmt_mfa({P, A}) -> % primop
+    str("~p:/~b", [P, A]).
+
+%% @doc Return what should correspond to the Erlang module for the
+%% specified filename.
+-spec filename_to_module(file:filename()) -> atom().
+
+filename_to_module(Filename) ->
+    list_to_atom(filename:basename(filename:rootname(Filename))).
+
+
+%% @doc Detect common functions generated by the compiler for each module.
+-spec internal_function(term()) -> boolean().
+
+internal_function({_, module_info, 0}) -> true;
+internal_function({_, module_info, 1}) -> true;
+internal_function({_, record_info, 2}) -> true;
+internal_function(_) -> false.
+
+
+-spec emsg(string()) -> ok.
+emsg(Msg) ->
+    io:format(standard_error, "ERROR: ~p~n", [Msg]).
+
+-spec emsg(string(), [any()]) -> ok.
+emsg(Msg, Args) ->
+    io:format(Msg ++ "~n", Args).
+
+
+%% @doc Variation of the rpc:pmap/3 function which limits the number of
+%% active processes. This can prove useful when each process requires
+%% lots of memory.
+
+-spec pmap({module(), atom()}, [any()], [any()], pos_integer()) -> [any()].
+
+pmap({M, F}, Extra, List, N) ->
+    Funs = [fun() -> apply(M, F, [Arg|Extra]) end || Arg <- List],
+    pmap_init(Funs, N).
+
+-record(pst, {num = 0,
+              queue = [],
+              results = [],
+              active = 0}).
+
+%% @doc Start by running Size processes in parallel, then add
+%% one process for each process that terminates.
+pmap_init(Funs, Size) ->
+    {First, Next} = take(Size, Funs),
+    St1 = lists:foldl(
+        fun(_F, S) -> spawn_next(S) end, #pst{queue = First}, First),
+    pool(St1#pst{queue = Next}).
+
+take(N, List) when N > 0 ->
+    take(N, List, []).
+
+take(N, Rest, Acc) when N =:= 0 orelse Rest =:= [] ->
+    {lists:reverse(Acc), Rest};
+take(N, [H|T], Acc) ->
+    take(N-1, T, [H|Acc]).
+
+pool(#pst{active = 0, results = R}) ->
+    [V || {_, V} <- lists:keysort(1, R)];
+pool(#pst{results = R, active = A} = St0) ->
+    receive
+        {ok, Key, Val} ->
+            St1 = St0#pst{results = [{Key, Val}|R], active = A-1},
+            pool(spawn_next(St1))
+    end.
+
+spawn_next(#pst{num = N0, queue = [Fun|Qt], active = A} = St0) ->
+    N1 = N0 + 1,
+    Self = self(),
+    spawn(fun() -> Res = Fun(), Self ! {ok, N1, Res} end),
+    St0#pst{num = N1, queue = Qt, active = A + 1};
+spawn_next(#pst{queue = []} = St0) ->
+    St0.
 
 
 %%% Core Erlang manipulation utilities:
 %%% ___________________________________
 
 
-%% @spec get_core(file:filename()) -> Ret
-%% where
-%%    Ret = {ok, Core::cerl:c_module()} | {error, Reason::string()}
 %% @doc Compile to Core Erlang and return the parsed core tree.
 
 -type get_core_ret() :: {ok, cerl:c_module()} | {error, string()}.
@@ -204,9 +323,6 @@ dict_cons(Key, Val, Dict) ->
 get_core(Filename) ->
     get_core(Filename, []).
 
-%% @spec get_core(file:filename(), [atom()]) -> Ret
-%% where
-%%    Ret = {ok, Core::cerl:c_module()} | {error, Reason::string()}
 %% @doc Compile to Core Erlang and return the parsed core tree.
 
 -spec get_core(file:filename(), [atom()]) -> get_core_ret().
@@ -259,125 +375,4 @@ get_abstract_code_from_beam(Filename) ->
             %% No or unsuitable abstract code.
             error
     end.
-
-
--spec str(string(), [any()]) -> string().
-
-str(Format, Args) ->
-    lists:flatten(io_lib:format(Format, Args)).
-
-
-%% @doc Return the various representations of functions/primops as a string.
-
--spec fmt_mfa(emfa() | primop()) -> string().
-
-fmt_mfa({M, F, A}) ->
-    str("~p:~p/~p", [M, F, A]);
-fmt_mfa({F, A}) ->
-    str("primop ~s/~B", [F, A]).
-
-
-%% @doc Remove any functions belonging to Modules from the Table.
-
--spec delete_modules(dict(), [module()]) -> dict().
-
-delete_modules(Table, []) ->
-    Table;
-delete_modules(Table, Modules) ->
-    S = sets:from_list(Modules),
-    dict:filter(
-        fun({M,_,_}, _Val) -> not sets:is_element(M, S); (_K, _V) -> true end,
-        Table).
-
-
-%% @doc Return what should correspond to the Erlang module for the
-%% specified filename.
--spec filename_to_module(file:filename()) -> atom().
-
-filename_to_module(Filename) ->
-    list_to_atom(filename:basename(filename:rootname(Filename))).
-
-
--spec internal_function(term()) -> boolean().
-
-internal_function({_, module_info, 0}) ->
-    true;
-internal_function({_, module_info, 1}) ->
-    true;
-internal_function({_, record_info, 2}) ->
-    true;
-internal_function(_) ->
-    false.
-
-%% @doc Simple stateful acculumator for quick testing.
--spec count(any()) -> pos_integer().
-
-count(Name) ->
-    Key = {count, Name},
-    case get(Key) of
-        undefined ->
-            put(Key, 2),
-            1;
-        N when is_integer(N) ->
-            put(Key, N + 1)
-    end.
-
-
-
-%% @doc Variation of the rpc:pmap/3 function which limits the number of
-%% active processes. This can prove useful when each process requires
-%% lots of memory.
-
--spec pmap({module(), atom()}, [any()], [any()], pos_integer()) -> [any()].
-
-pmap({M, F}, Extra, List, N) ->
-    Funs = [fun() -> apply(M, F, [Arg|Extra]) end || Arg <- List],
-    pmap_init(Funs, N).
-
--record(pst, {num = 0,
-              queue = [],
-              results = [],
-              active = 0}).
-
-%% @doc Start by running Size processes in parallel, then add
-%% one process for each process that terminates.
-pmap_init(Funs, Size) ->
-    {First, Next} = take(Size, Funs),
-    St1 = lists:foldl(
-        fun(_F, S) -> spawn_next(S) end, #pst{queue = First}, First),
-    pool(St1#pst{queue = Next}).
-
-take(N, List) when N > 0 ->
-    take(N, List, []).
-
-take(N, Rest, Acc) when N =:= 0 orelse Rest =:= [] ->
-    {lists:reverse(Acc), Rest};
-take(N, [H|T], Acc) ->
-    take(N-1, T, [H|Acc]).
-
-pool(#pst{active = 0, results = R}) ->
-    [V || {_, V} <- lists:keysort(1, R)];
-pool(#pst{results = R, active = A} = St0) ->
-    receive
-        {ok, Key, Val} ->
-            St1 = St0#pst{results = [{Key, Val}|R], active = A-1},
-            pool(spawn_next(St1))
-    end.
-
-spawn_next(#pst{num = N0, queue = [Fun|Qt], active = A} = St0) ->
-    N1 = N0 + 1,
-    Self = self(),
-    spawn(fun() -> Res = Fun(), Self ! {ok, N1, Res} end),
-    St0#pst{num = N1, queue = Qt, active = A + 1};
-spawn_next(#pst{queue = []} = St0) ->
-    St0.
-
-
--spec emsg(string()) -> ok.
-emsg(Msg) ->
-    io:format(standard_error, "ERROR: ~p~n", [Msg]).
-
--spec emsg(string(), [any()]) -> ok.
-emsg(Msg, Args) ->
-    io:format(Msg ++ "~n", Args).
 

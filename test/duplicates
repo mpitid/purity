@@ -4,15 +4,17 @@
 %% Test whether running the analysis in parallel has the same results
 %% as running it sequentially.
 
+-mode(compile).
+
 main(Files) ->
     T1 = purity:modules(Files, [], dict:new()),
     T2 = purity:pmodules(Files, [], dict:new()),
     lists:foreach(
-        fun(L) ->
-                P1 = purity:propagate(T1, [{purelevel,L}]),
-                P2 = purity:propagate(T2, [{purelevel,L}]),
-                compare(L, P1, P2) end,
-        [1,2,3]),
+        fun(Opts) ->
+                P1 = purity:propagate(T1, Opts),
+                P2 = purity:propagate(T2, Opts),
+                compare(Opts, P1, P2) end,
+        [[],[termination],[both]]),
     halt(0).
 
 compare(L, T1, T2) ->
@@ -21,9 +23,9 @@ compare(L, T1, T2) ->
     case T11 =:= T22 of
         true -> ok;
         false ->
-            io:format("TEST FAILED for purelevel ~p~n", [L]),
-            F1 = purity_utils:str("_d1-~b", [L]),
-            F2 = purity_utils:str("_d2-~b", [L]),
+            io:format("TEST FAILED for options ~p~n", [L]),
+            F1 = purity_utils:str("_d1-~p", [L]),
+            F2 = purity_utils:str("_d2-~p", [L]),
             runtest:dump_term(F1, T11),
             runtest:dump_term(F2, T22),
             io:format("vimdiff -R ~s ~s~n", [F1, F2])

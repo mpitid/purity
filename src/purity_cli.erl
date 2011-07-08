@@ -27,11 +27,12 @@
 
 -export([main/0]).
 
--import(purity_utils, [fmt_mfa/1, str/2, emsg/1, emsg/2]).
 
+-define(plt, purity_plt).
+-define(utils, purity_utils).
 
-%% @spec main() -> no_return()
-%%
+-import(?utils, [fmt_mfa/1, str/2]).
+
 %% @doc Parse any command line arguments, analyse all supplied files
 %% and print the results of the analysis to standard output.
 
@@ -66,12 +67,11 @@ main() ->
 
     Plt = case option(build_plt, Options) of
         true ->
-            purity_plt:new();
+            ?plt:new();
         false ->
             timeit("Loading PLT", fun() -> load_plt(Options) end)
     end,
-    {Table, Final} = do_analysis(Files, Options,
-        purity_plt:get_cache(Plt, Options)),
+    {Table, Final} = do_analysis(Files, Options, ?plt:table(Plt, Options)),
 
     %io:format("sizeof(Table): ~p, ~p~n", [erts_debug:size(Table), erts_debug:flat_size(Table)]),
     %io:format("sizeof(Final): ~p, ~p~n", [erts_debug:size(Final), erts_debug:flat_size(Final)]),
@@ -93,7 +93,7 @@ main() ->
             end
     end,
 
-    Modules = [purity_utils:filename_to_module(M) || M <- Files],
+    Modules = [?utils:filename_to_module(M) || M <- Files],
     case option(quiet, Options) of
         false -> % Print results.
             Requested = sets:from_list(Modules),
@@ -101,7 +101,7 @@ main() ->
             lists:foreach(fun(A) -> pretty_print(Print, A) end, lists:sort(
                     [V || {{M,_,_}=MFA, _} = V <- dict:to_list(Final),
                         sets:is_element(M, Requested),
-                        not purity_utils:internal_function(MFA)]));
+                        not ?utils:internal_function(MFA)]));
         true ->
             ok
     end,
@@ -116,11 +116,12 @@ main() ->
 
     case option(build_plt, Options) orelse option(add_to_plt, Options) of
         true ->
-            PltIn = option(plt, Options, purity_plt:get_default_path()),
+            PltIn = option(plt, Options, ?plt:default_path()),
             PltOut = option(output_plt, Options, PltIn),
             ok = timeit("Updating PLT", fun() ->
-              Plt1 = purity_plt:update(Plt, Files, Table, Final, Options),
-              purity_plt:save(Plt1, PltOut) end);
+              {ok, Plt1} = ?plt:update(Plt, Options, {Files, Table, Final}),
+              %Plt1 = purity_plt:update(Plt, Files, Table, Final, Options),
+              ?plt:save(Plt1, PltOut) end);
         false ->
             ok
     end,
@@ -150,24 +151,23 @@ with_option(Opt, Options, Action) ->
     end.
 
 load_plt(Opts) ->
-    Fn = option(plt, Opts, purity_plt:get_default_path()),
+    Fn = option(plt, Opts, ?plt:default_path()),
     DoCheck = not option(no_check, Opts),
-    case purity_plt:load(Fn) of
+    case ?plt:load(Fn) of
         {error, Type} ->
-            emsg("Could not load PLT file '~s': ~p", [Fn, Type]),
-            purity_plt:new();
+            ?utils:emsg("Could not load PLT file '~s': ~p", [Fn, Type]),
+            ?plt:new();
         {ok, Plt} when DoCheck ->
-            case purity_plt:check(Plt) of
-                old_version ->
-                    emsg("PLT is out of date, create a new one"),
-                    {fatal, old_version};
-                {differ, Failed} ->
+            case ?plt:verify(Plt) of
+                incompatible_version ->
+                    ?utils:emsg("PLT is out of date, create a new one"),
+                    {fatal, incompatible_version};
+                {changed_files, Failing} ->
                     io:format("PLT will be updated because the following "
                               "modules have changed:~n~s",
-                                [string:join([format_changed(F)
-                                            || F <- Failed], "\n")]),
-                    New = purity:analyse_changed(Failed, Opts, Plt),
-                    ok = purity_plt:save(New, Fn),
+                              [string:join(format_changed(Failing),"\n")]),
+                    New = purity:analyse_changed(Failing, Opts, Plt),
+                    ok = ?plt:save(New, Fn),
                     New;
                 ok ->
                     Plt
@@ -176,18 +176,17 @@ load_plt(Opts) ->
             Plt
     end.
 
-format_changed({differ, F}) ->
-    str(" M  ~s", [F]);
-format_changed({error, F}) ->
-    str(" E  ~s", [F]).
+format_changed({Mismatch, Errors}) ->
+    [str(" M ~s", [F]) || F <- Mismatch] ++
+    [str(" E ~s", [F]) || F <- Errors].
+
 
 parse_args() ->
     Spec = [
         {purelevel, [
                 "-l", "--level",
                 {type, {intchoice, [1,2,3]}},
-                {default, 1},
-                {help, "Select one of three progressively stricter purity levels [default: 1]"}]},
+                {help, "Select one of three progressively stricter purity levels"}]},
         {with_reasons, [
                 "--with-reasons",
                 {type, bool},
@@ -257,9 +256,6 @@ option(Name, Options, Default) ->
     proplists:get_value(Name, Options, Default).
 
 
--type pure() :: true | {false, string()} | [any()] | undefined.
--spec pretty_print(fun((_,_) -> ok), {purity_utils:emfa(), pure()}) -> ok.
-
 pretty_print(Print, {MFA, Result}) ->
     Print("~s ~s.~n", [fmt_mfa(MFA), fmt(Result)]).
 
@@ -280,18 +276,38 @@ print_missing(Print, Table) ->
 %% @doc Consistent one-line formatting of purity results. Helps
 %% produce cleaner diffs of the output.
 
--spec fmt(pure()) -> string().
+-spec fmt(purity:pure()) -> string().
 
-fmt(true) ->
-    "true";
-fmt(false) ->
-    "false";
-fmt({false, Reason}) ->
-    str("{false,\"~s\"}", [Reason]);
-fmt(undefined) ->
-    "undefined";
-fmt(Ctx) when is_list(Ctx) ->
-    str("~w", [purity_utils:remove_args(Ctx)]).
+fmt({P, []}) ->
+    fmt(P);
+fmt({P, D}) when is_list(D) ->
+    str("~s ~w", [fmt(P), simplify_deps(D)]);
+fmt({at_least, P}) ->
+    str(">= ~s", [P]);
+fmt(P) when is_atom(P) ->
+    atom_to_list(P).
+
+simplify_deps(Ds) ->
+    [simplify_dep(D) || D <- Ds].
+
+simplify_dep({arg, N}) ->
+    N;
+simplify_dep({Type, Fun, Args}) ->
+    {Type, Fun, unclutter(Args)};
+simplify_dep({free, {F, Args}}) ->
+    case unclutter(Args) of
+        [] -> {free, F};
+        As -> {free, {F, As}}
+    end;
+simplify_dep(Dep) ->
+    Dep.
+
+unclutter(Args) -> [A || A <- Args, not is_clutter(A)].
+
+is_clutter({arg, {_, _}}) -> true;
+is_clutter({sub, _}) -> true;
+is_clutter(_) -> false.
+
 
 
 %% @doc Execute Fun and print elapsed time.

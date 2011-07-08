@@ -9,9 +9,9 @@ The format of test results is:
     %< OPTIONS? FUN RESULT
 
 where:
-    * OPTIONS is a an erlang list of option tuples.
-    * FUN identifies a functioni either as a {module,function,arity}
-    tuple or function/arity specification.
+    * OPTIONS is an erlang list of option tuples.
+    * FUN identifies a function either as a {module,function,arity}
+      tuple or function/arity specification.
     * RESULT is an erlang term representing the expected result.
 
 """
@@ -58,8 +58,19 @@ def extract(lines):
                 opt, fun, result = parse_test(line)
                 fun = parse_fun(fun)
                 assert fun not in tests[opt], "duplicate test %r" % fun
-                tests[opt][fun] = result
+                tests[opt][fun] = structure(result)
     return opts, merge_tests(tests)
+
+def structure(result):
+    rgx = re.compile('(>= )?([peds])(.+)?')
+    match = rgx.match(result)
+    if not match:
+        return result # Old style matching
+    ge, p, deps = match.groups()
+    if ge is not None:
+        p = '{at_least, %s}' % p
+    deps = '[]' if deps is None else deps.strip()
+    return '{%s, %s}' % (p, deps)
 
 def merge_tests(tests):
     """Fill incomplete tests with the corresponding default test."""

@@ -4,9 +4,17 @@
 .Urgent
 
 .Sometime
+- Somehow store guard *expressions* in the lookup table, so that guards
+  like `when lists:all(fun pure/1, L)` can be resolved.
+
+- Move information gathering to separate module.
 
 .Maybe
 - Make error handling pure, by passing errors/warnings around in the
   state record
+
+- Add plt option to keep only certain applications in the PLT. This
+  would provide more refined results, while making subsequent runs
+  faster, given that only the kept subset is of interest to the user.
 
 // vim: set ft=asciidoc tw=72:
