@@ -46,7 +46,6 @@
          propagate_termination/2,
          find_missing/1]).
 -export([analyse_changed/3]).
-
 -export([purity_of/2]).
 
 
@@ -77,6 +76,7 @@
 %% {erlang,error,1}, {erlang,throw,1}, {erlang,exit,1}
 %% {match_fail,1}, {raise,2}
 
+-type purity()       :: purity_utils:purity().
 -type options()      :: purity_utils:options().
 -type deplist()      :: purity_utils:deplist().
 %-type argument()     :: purity_utils:argument().
@@ -100,9 +100,9 @@
 
 is_pure({_,_,_} = MFA, Table) ->
     case dict:find(MFA, Table) of
-        {ok, true} ->
+        {ok, {p, []}} ->
             true;
-        _Other ->
+        _ ->
             false
     end.
 
@@ -498,8 +498,7 @@ receive_type(Tree) ->
 %% `{arg, 1}'. All other dependencies are propagated unchanged, with
 %% the exception of self calls which are transformed to self calls of
 %% the parent function in order to preserve the semantics of the analysis
-%% (in the case of HOFs, but also with regard to termination analysis
-%% which is not implemented yet).
+%% (in the case of HOFs, but also with regard to termination analysis).
 promote_nested(#state{mfa = Fun, ctx = Ctx} = St) ->
     {Nested, Rest} = lists:partition(fun(D) -> is_nested(D, St) end, Ctx),
     Promoted = lists:flatten([map_nested(Fun, N, St) || N <- Nested]),
@@ -1096,7 +1095,8 @@ propagate_purity(Tab, _Opts) ->
     S0 = #s{tab = T1, rev = ?utils:function_rmap(T1)},
 
     S1 = preprocess(S0),
-    T2 = converge_contaminate(S1#s{ ws = initial_workset(S1#s.tab) }),
+    Fn = fun(S) -> resolve_independent_sccs(contaminate(S)) end,
+    T2 = converge_contaminate(Fn, S1#s{ ws = initial_workset(S1#s.tab) }),
     S2 = postprocess(S1#s{tab = T2}),
 
     map_to_level(S2#s.tab, _Opts).
@@ -1143,14 +1143,14 @@ initial_workset(Tab) ->
 
 %%% Contamination: This is the core of the algorithm.
 %%% Pureness values contaminate dependent functions, and functions
-%%% whose dependency list has been completely %% resolved are added
-%%% to the working set.
+%%% whose dependency list has been completely resolved are added to
+%%% the working set.
 
-converge_contaminate(#s{tab = T} = S0) ->
-    case resolve_independent_sccs(contaminate(S0)) of
-        #s{tab = T} -> T;
-        S1 -> converge_contaminate(S1)
-    end.
+converge_contaminate(_, #s{ws = [], tab = T}) ->
+    T;
+converge_contaminate(Fun, #s{} = S) ->
+    converge_contaminate(Fun, Fun(S)).
+
 
 contaminate(#s{ws = []} = S) ->
     S;
@@ -1612,7 +1612,7 @@ workset(Functions) ->
 %%% Miscellaneous helpers.
 
 
--spec purity_of(any(), dict()) -> atom() | {at_least, atom()}.
+-spec purity_of(term(), dict()) -> purity().
 
 purity_of(F, T) ->
     case dict:fetch(F, T) of
@@ -1623,8 +1623,6 @@ purity_of(F, T) ->
         %% Functions with non-empty dependency lists.
         {P, D} when is_atom(P), is_list(D) -> {at_least, P}
     end.
-
-%% Dict helpers.
 
 
 %% Digraph helpers.
@@ -1673,17 +1671,12 @@ propagate_termination(Tab, _Opts) ->
     S0 = #s{tab = T1, rev = ?utils:function_rmap(T1)},
 
     S1 = preprocess_termination(S0),
-    T2 = converge_contaminate_termination(S1#s{ ws = initial_workset(S1#s.tab) }),
+    Fn = fun(S) -> mark_sccs(contaminate(S)) end,
+    T2 = converge_contaminate(Fn, S1#s{ ws = initial_workset(S1#s.tab) }),
     S2 = postprocess(S1#s{tab = T2}),
 
     S2#s.tab.
 
-
-converge_contaminate_termination(#s{tab = T} = S0) ->
-    case mark_sccs(contaminate(S0)) of
-        #s{tab = T} -> T;
-        S1 -> converge_contaminate_termination(S1)
-    end.
 
 %% @doc When it comes to termination analysis this step overlaps with
 %% the contamination algorithm, and is not strictly necessary.
