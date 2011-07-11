@@ -147,7 +147,7 @@ pmodules(Modules, Options, Tab0) when is_list(Modules) ->
     CPUs = erlang:system_info(logical_processors),
     prune_merge(Tab0,
                 lists:zip([?utils:filename_to_module(M) || M <- Modules],
-                          ?utils:pmap({purity, panalyse},
+                          ?utils:pmap({?MODULE, panalyse},
                                       [Options], Modules, CPUs))).
 
 %% Before merging the tables remove any values with the same module
