@@ -16,7 +16,11 @@ SCRIPTS ?= scripts
 include vsn.mk
 VSN := $(PURITY_VSN)
 
-FILES := purity purity_utils purity_cli purity_plt purity_stats core_aliases cl_parser purity_bifs runtest
+FILES := purity purity_collect purity_analyse \
+	 purity_cli purity_plt \
+	 purity_utils purity_stats purity_bifs \
+	 cl_parser core_aliases runtest
+
 SRC   := $(addsuffix .erl, $(FILES))
 BIN   := $(addprefix $(EBIN)/, $(addsuffix .beam, $(FILES)))
 CHEATS := predef/cheats predef/bifs predef/primops

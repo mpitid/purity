@@ -7,8 +7,6 @@
 - Somehow store guard *expressions* in the lookup table, so that guards
   like `when lists:all(fun pure/1, L)` can be resolved.
 
-- Move information gathering to separate module.
-
 .Maybe
 - Make error handling pure, by passing errors/warnings around in the
   state record

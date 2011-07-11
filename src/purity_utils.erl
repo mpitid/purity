@@ -25,9 +25,9 @@
 
 -module(purity_utils).
 
--export([dependencies/3, module_rmap/1, function_rmap/1]).
+-export([dependencies/2, dependencies/3, module_rmap/1, function_rmap/1]).
 
--export([is_mfa/1, is_primop/1, is_expr/1]).
+-export([is_mfa/1, is_primop/1, is_expr/1, is_bif/1]).
 
 -export([delete_modules/2]).
 
@@ -43,6 +43,8 @@
 -export([pmap/4]).
 
 -export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
+
+-export([option/2, option/3]).
 
 
 -export_type([options/0, purity/0, purity_level/0, primop/0, emfa/0]).
@@ -138,6 +140,18 @@ dependencies(DepList, Filter, Higher) when is_list(DepList) ->
 common_dependencies(D) ->
     is_mfa(D) orelse is_primop(D) orelse is_expr(D).
 
+
+%% @doc Higher level dependency collectors which work on an entire lookup table.
+-spec dependencies(dict(), fun((term()) -> boolean())) -> [term()].
+
+dependencies(Table, Filter) ->
+    uflatten(dict:fold(dep_collector(Filter), [], Table)).
+
+%% @doc Create a function to collect any dependencies passing the filter.
+dep_collector(Filter) ->
+    fun (_, V, Ds) -> [dependencies(V, Filter, true)|Ds] end.
+
+
 %% Dependency filters.
 
 -spec is_mfa(term()) -> boolean().
@@ -158,6 +172,9 @@ is_expr({erl, _}) ->
 is_expr(_) ->
     false.
 
+-spec is_bif(term()) -> boolean().
+is_bif(Fun) ->
+    (is_mfa(Fun) orelse is_primop(Fun)) andalso purity_bifs:is_known(Fun).
 
 %% @doc Remove any functions belonging to Modules from the Table.
 
@@ -375,4 +392,14 @@ get_abstract_code_from_beam(Filename) ->
             %% No or unsuitable abstract code.
             error
     end.
+
+
+-spec option(atom(), options()) -> term().
+
+option(Name, Options) -> option(Name, Options, false).
+
+-spec option(atom(), options(), term()) -> term().
+
+option(Name, Options, Default) ->
+    proplists:get_value(Name, Options, Default).
 
