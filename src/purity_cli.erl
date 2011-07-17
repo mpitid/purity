@@ -161,7 +161,7 @@ load_plt(Opts) ->
             case ?plt:verify(Plt) of
                 incompatible_version ->
                     ?utils:emsg("PLT is out of date, create a new one"),
-                    {fatal, incompatible_version};
+                    halt(1);
                 {changed_files, Failing} ->
                     io:format("PLT will be updated because the following "
                               "modules have changed:~n~s",
