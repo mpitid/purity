@@ -29,11 +29,9 @@
 
 -define(utils, purity_utils).
 
--export([module/3, modules/3, pmodules/3]).
+-export([module/1, files/1, pfiles/1, file/1]).
 
--export([panalyse/2]).
-
--import(?utils, [dict_cons/3, str/2]).
+-import(?utils, [str/2]).
 
 
 -type map_key() :: cerl:var_name().
@@ -42,7 +40,6 @@
 
 -type sub() :: {dict(), dict()}.
 
--type options()      :: purity_utils:options().
 -type deplist()      :: purity_utils:deplist().
 -type dependency()   :: purity_utils:dependency().
 
@@ -66,7 +63,6 @@
 %% count    - Counter for giving unique names to nested functions
 %% names    - Ordered set of reserved function names, for excluding them
 %%            from unique identifiers
-%% opts     - Any options affecting analysis
 %% table    - Mapping of MFAs to their pureness result, be that a concrete
 %%            value or a context.
 -record(state, {mfa     = undefined  :: mfa() | undefined,
@@ -79,7 +75,6 @@
                 nested  = []         :: [mfa()],
                 count   = 1          :: pos_integer(),
                 names   = []         :: [atom()],
-                opts    = []         :: [any()],
                 table   = dict:new() :: dict()}).
 
 -type state() :: #state{}.
@@ -90,102 +85,88 @@
 %%
 %% Analysis starts from parsed core erlang terms.
 %%
-%% @see modules/3
+%% @see files/2
+-spec module(cerl:c_module()) -> dict().
 
--spec module(cerl:c_module(), options(), dict()) -> dict().
+module(Core) ->
+    module(Core, dict:new()).
 
-module(Core, Options, Tab0) ->
-    Module = cerl:concrete(cerl:module_name(Core)),
+
+module(Core, Table) ->
+    M = cerl:concrete(cerl:module_name(Core)),
     Defs = [{cerl:var_name(Var), Fun} || {Var, Fun} <- cerl:module_defs(Core)],
-    Names = lists:foldl(
-        fun({{F,_},_}, Set) -> ordsets:add_element(atom_to_list(F), Set) end,
-        ordsets:new(),
-        Defs),
-    St0 = state_new(Options, Names, ?utils:delete_modules(Tab0, [Module])),
+    Names = ordsets:from_list([atom_to_list(F) || {{F, _}, _} <- Defs]),
     Fun = fun({{F,A}, Fun}, St) ->
-            analyse(Fun, St#state{mfa = {Module, F, A},
+            analyse(Fun, St#state{mfa = {M,F,A},
                                   nested = [],
                                   vars = map_new(),
                                   subs = sub_new(),
                                   aliases = core_aliases:scan(Fun)}) end,
-    St1 = lists:foldl(Fun, St0#state{names = Names}, Defs),
-    St1#state.table.
+    T1 = ?utils:delete_modules(Table, [M]),
+    S1 = lists:foldl(Fun, #state{names = Names, table = T1}, Defs),
+    S1#state.table.
 
 
-%% @doc Analyse a list of modules.
+%% @doc Analyse a list of Erlang modules.
 %%
 %% Each module is analysed separately, and the lookup table is incrementally
-%% updated.
+%% updated. The modules can be Erlang source code or already compiled BEAM
+%% files with debug information.
 %%
-%% @see module/3
+%% @see module/2
 
--spec modules([string()], options(), dict()) -> dict().
+-spec files([file:filename()]) -> dict().
 
-modules(Modules, Options, Tab0) when is_list(Modules) ->
-    lists:foldl(
-        fun(File, TabN) ->
-                case ?utils:get_core(File) of
-                    {ok, Core} ->
-                        module(Core, Options, TabN);
-                    {error, Reason} ->
-                        ?utils:emsg(Reason),
-                        TabN
-                end end,
-        Tab0, Modules).
+files(Filenames) ->
+    files(Filenames, dict:new()).
+
+files(Filenames, Table) when is_list(Filenames) ->
+    lists:foldl(fun file/2, Table, Filenames).
+
+%% @doc Analyse a single file.
+%% In case of error a message is printed and an empty lookup table is
+%% returned.
+
+-spec file(file:filename()) -> dict().
+
+file(Filename) ->
+    file(Filename, dict:new()).
+
+
+file(Filename, Table) ->
+    case ?utils:get_core(Filename) of
+        {ok, Core} ->
+            module(Core, Table);
+        {error, Reason} ->
+            ?utils:emsg(Reason),
+            Table
+    end.
+
 
 %% @doc Analyse a list of modules in parallel.
 %%
 %% The number of parallel operations is limited to the number of
 %% cpu processors/cores in order to minimise memory use.
 %%
-%% @see module/3
-%% @see modules/3
+%% @see module/2
+%% @see files/1
 
--spec pmodules([file:filename()], options(), dict()) -> dict().
+-spec pfiles([file:filename()]) -> dict().
 
-pmodules(Modules, Options, Tab0) when is_list(Modules) ->
+pfiles(Filenames) when is_list(Filenames) ->
     CPUs = erlang:system_info(logical_processors),
-    prune_merge(Tab0,
-                lists:zip([?utils:filename_to_module(M) || M <- Modules],
-                          ?utils:pmap({?MODULE, panalyse},
-                                      [Options], Modules, CPUs))).
+    Tabs = ?utils:pmap({?MODULE, file}, [], Filenames, CPUs),
+    merge_dicts(lists:zip(to_modules(Filenames), Tabs)).
 
-%% Before merging the tables remove any values with the same module
-%% that may be contained already. To make this faster first index
-%% on the module, so that there is no need to traverse the whole
-%% table to remove the values.
-prune_merge(Tab, MTs) ->
-    ungroup(update(group(Tab), MTs)).
+%% @doc If the same module is provided more than once, keep the last occurence.
+merge_dicts(Dicts) ->
+    ?utils:dict_fold(
+        fun (_, D, Ds) -> ?utils:dict_update(D, Ds) end,
+        dict:from_list(Dicts)).
 
-%% Group all values sharing the same module to a single key.
-group(Tab) ->
-    dict:fold(fun group_add/3, dict:new(), Tab).
+to_modules(Filenames) ->
+    [?utils:filename_to_module(F) || F <- Filenames].
 
-group_add({M,_,_}=K, V, T) ->
-    dict_cons(M, {K, V}, T);
-group_add(K, V, T) ->
-    %% Make sure non-MFA keys are not overwritten, hence the tuple.
-    dict_cons({non_mfa}, {K, V}, T).
-
-ungroup(Tab) ->
-    %% The values of the first table are grouped as a list,
-    %% while those of the rest as dicts.
-    dict:fold(fun(_, Vs, T) when is_list(Vs) -> update(T, Vs);
-                 (_, Vs, T) -> dict:fold(fun dict:store/3, T, Vs) end,
-              dict:new(), Tab).
-
-
--spec panalyse(file:filename(), options()) -> dict().
-
-panalyse(Filename, Options) ->
-    Tab = dict:new(),
-    case ?utils:get_core(Filename) of
-        {ok, Core} ->
-            module(Core, Options, Tab);
-        {error, Reason} ->
-            ?utils:emsg(Reason),
-            Tab
-    end.
 
 
 analyse(Function, St0) ->
@@ -812,11 +793,6 @@ name_or_alias(Name, St, Fun) ->
 lookup_alias(Name, #state{aliases = Aliases}) ->
     dict:find(Name, Aliases).
 
-
-state_new(Options, Names, Table) ->
-    #state{opts  = Options,
-           names = Names,
-           table = Table}.
 
 sub_new() -> {dict:new(), dict:new()}.
 

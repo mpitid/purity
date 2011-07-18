@@ -1,0 +1,94 @@
+#!/bin/zsh
+# Test certain aspects of the analysis in combination with PLT
+# creation and updates.
+#
+# In particular, these tests verify that incremental analysis with the
+# help of a PLT has the exact same results as running the analysis in
+# one step.
+#
+# Furthermore these tests assert that PLT creation, update and export are
+# at least crash free.
+#
+# WARNING:
+# Running these tests on a large collection of modules (e.g. OTP) is
+# bound to take a *lot* of time, since PLT update operations depend on
+# the size of the PLT.
+#
+# Another caveat one should be aware of is that incremental analysis
+# is not guaranteed to provide consistent results as the order in which
+# modules are analysed changes. This only affects analysis of different
+# modules with the same name however (since only the last one is kept).
+# TODO: Add test case showcasing this behaviour.
+
+#set -e
+
+export ERL_LIBS=$(pwd)
+
+root=$(mktemp --tmpdir --directory test_plt.XXXXXXXX)
+
+target=($@)
+
+run_purity() {
+    echo "purity -q $@" >> "$root/test.log"
+    purity -q $@ &>> "$root/test.log"
+}
+
+export_plt() {
+    scripts/export_plt $1 ${1:r}.txt
+}
+
+compare() {
+    plt1=${1:r}.txt
+    plt2=${2:r}.txt
+    if ! diff -q $plt1 $plt2; then
+        echo "PLT TEST FAILED"
+        echo "vimdiff -R '$plt1' '$plt2'"
+        return 1
+    fi
+    return 0
+}
+
+all=$root/all.plt
+run_purity -b --output-plt $all $target
+export_plt $all
+
+failed=0
+
+## Verify that re-analysing a single module at a time
+## and updating the PLT yields the original result.
+test1() {
+    for file in $target; do
+        plt=$root/$(basename ${file:r}).plt
+        run_purity -p $all --add-to-plt --output-plt $plt $file
+        export_plt $plt
+        compare $all $plt
+        (( failed += $? ))
+    done
+}
+
+## Verify that analysing all the modules incrementally while updating
+## the PLT yields the same result as analysing them at once.
+test2() {
+    plt=$root/null.plt
+    scripts/empty_plt $plt
+
+    #scripts/test_plt $plt $target
+    for file in $target; do
+        run_purity -p $plt --add-to-plt $file
+    done
+    export_plt $plt
+    compare $all $plt
+    (( failed += $? ))
+}
+
+test1
+test2
+
+if [[ $failed -gt 0 ]]; then
+    echo "$failed PLT TESTS FAILED"
+    exit 1
+else
+    echo "ALL PLT TESTS PASSED"
+    rm -r $root
+fi
+

@@ -32,6 +32,7 @@
 -define(utils, purity_utils).
 
 -import(?utils, [fmt_mfa/1, str/2]).
+-import(?utils, [timeit/3, format_time/1, get_time/0]).
 
 %% @doc Parse any command line arguments, analyse all supplied files
 %% and print the results of the analysis to standard output.
@@ -69,9 +70,9 @@ main() ->
         true ->
             ?plt:new();
         false ->
-            timeit("Loading PLT", fun() -> load_plt(Options) end)
+            timeit("Loading PLT", fun load_plt/1, [Options])
     end,
-    {Table, Final} = do_analysis(Files, Options, ?plt:table(Plt, Options)),
+    {Table, Final} = do_analysis(Files, Options, Plt),
 
     %io:format("sizeof(Table): ~p, ~p~n", [erts_debug:size(Table), erts_debug:flat_size(Table)]),
     %io:format("sizeof(Final): ~p, ~p~n", [erts_debug:size(Final), erts_debug:flat_size(Final)]),
@@ -116,30 +117,32 @@ main() ->
 
     case option(build_plt, Options) orelse option(add_to_plt, Options) of
         true ->
-            PltIn = option(plt, Options, ?plt:default_path()),
-            PltOut = option(output_plt, Options, PltIn),
-            ok = timeit("Updating PLT", fun() ->
-              {ok, Plt1} = ?plt:update(Plt, Options, {Files, Table, Final}),
-              %Plt1 = purity_plt:update(Plt, Files, Table, Final, Options),
-              ?plt:save(Plt1, PltOut) end);
-        false ->
-            ok
+            %% Look for output file or fall back to input file.
+            PI = option(plt, Options, ?plt:default_path()),
+            PO = option(output_plt, Options, PI),
+            %% Update and save PLT.
+            ok = timeit("Updating PLT", fun update_plt/6,
+                        [PO, Plt, Options, Files, Table, Final]);
+        false -> ok
     end,
-    io:format("Analysis completed in ~s~n", [format_elapsed(T0, get_time())]),
+    io:format("Analysis completed in ~s~n", [format_time(get_time() - T0)]),
     init:stop().
+
+update_plt(Output, Plt0, Options, Files, T, R) ->
+    %% Table inconsistencies should not be possible when using
+    %% the command line interface, thus success is guaranteed.
+    {ok, Plt1} = ?plt:update(Plt0, Options, {Files, T, R}),
+    ?plt:save(Plt1, Output).
 
 
 do_stats(Filename, Modules, Table) ->
-    ok = timeit("Generating statistics",
-        fun() -> purity_stats:write(Filename,
-                    purity_stats:gather(Modules, Table)) end).
+    ok = timeit("Generating statistics", fun purity_stats:write/2,
+                [Filename, purity_stats:gather(Modules, Table)]).
 
-do_analysis(Files, Options, Initial) ->
-    Table = timeit("Traversing AST", fun() ->
-                purity:pmodules(Files, Options, Initial) end),
-    Final = timeit("Propagating values", fun() ->
-                purity:propagate(Table, Options) end),
-    {Table, Final}.
+do_analysis(Files, Options, Plt) ->
+    T = timeit("Traversing AST", fun purity:pfiles/1, [Files]),
+    R = timeit("Propagating values", fun purity:propagate/3, [T, Plt, Options]),
+    {T, R}.
 
 
 with_option(Opt, Options, Action) ->
@@ -307,27 +310,6 @@ unclutter(Args) -> [A || A <- Args, not is_clutter(A)].
 is_clutter({arg, {_, _}}) -> true;
 is_clutter({sub, _}) -> true;
 is_clutter(_) -> false.
-
-
-
-%% @doc Execute Fun and print elapsed time.
-timeit(Msg, Fun) ->
-    io:format("~-22s... ", [Msg]),
-    T1 = get_time(),
-    Result = Fun(),
-    T2 = get_time(),
-    io:format("done in ~s~n", [format_elapsed(T1, T2)]),
-    Result.
-
-format_elapsed(T1, T2) ->
-    Time = T2 - T1,
-    M = Time div 60000,
-    S = (Time rem 60000) / 1000,
-    str("~bm~5.2.0fs", [M, S]).
-
-get_time() ->
-    {T0, _} = statistics(wall_clock),
-    T0.
 
 
 %% @doc Given a list of application names, return a list of the corresponding

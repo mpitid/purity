@@ -63,7 +63,7 @@ main([File1, File2, DumpDir]) ->
 %    ordsets:subtract(ordsets:union(S1, S2), ordsets:intersection(S1, S2)).
 
 run_analysis(File, Popts, Topts) ->
-    Tab = purity:modules([File], Popts, dict:new()),
+    Tab = purity:files([File]),
     case option(traverse_only, Topts) of
         true -> Tab;
         false -> purity:propagate(Tab, Popts) end.

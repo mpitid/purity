@@ -27,13 +27,15 @@
 -module(purity_analyse).
 
 
+-define(plt, purity_plt).
 -define(bifs, purity_bifs).
 -define(utils, purity_utils).
 
 -import(?utils, [dict_mapfold/3, dict_store/2, dict_store/3, dict_fetch/3]).
 
 
--export([propagate/2,
+-export([analyse/3,
+         propagate/2,
          propagate_both/2,
          propagate_purity/2,
          propagate_termination/2]).
@@ -103,7 +105,6 @@ propagate(Tab, Opts) ->
     end.
 
 
-
 is_hof(C) ->
     lists:any(fun arg_dep/1, C).
 
@@ -154,23 +155,22 @@ sup(A, B) when is_atom(A), is_atom(B) -> sup(B, A).
 sup(Values) when is_list(Values) ->
     lists:foldl(fun sup/2, p, Values).
 
+
 -spec propagate_purity(dict(), options()) -> dict().
 
-propagate_purity(Tab, _Opts) ->
+propagate_purity(Tab, Opts) ->
     %% These functions work on previous types of values.
     %% Leave removal of self-recursive dependencies to the end of the
     %% preprocessing stage in order to exploit any information when
     %% unfolding HOFs.
     T1 = add_predefined_purity(initialise(Tab)),
-
     S0 = #s{tab = T1, rev = ?utils:function_rmap(T1)},
-
     S1 = preprocess(S0),
     Fn = fun(S) -> resolve_independent_sccs(contaminate(S)) end,
     T2 = converge_contaminate(Fn, S1#s{ ws = initial_workset(S1#s.tab) }),
     S2 = postprocess(S1#s{tab = T2}),
 
-    map_to_level(S2#s.tab, _Opts).
+    map_to_level(S2#s.tab, Opts).
 
 
 %% Update table with the values of any necessary BIFs as well
@@ -740,12 +740,10 @@ map_purity({P, DL}, Values) ->
 propagate_termination(Tab, _Opts) ->
     T1 = add_predefined_termination(initialise(Tab)),
     S0 = #s{tab = T1, rev = ?utils:function_rmap(T1)},
-
     S1 = preprocess_termination(S0),
     Fn = fun(S) -> mark_sccs(contaminate(S)) end,
     T2 = converge_contaminate(Fn, S1#s{ ws = initial_workset(S1#s.tab) }),
     S2 = postprocess(S1#s{tab = T2}),
-
     S2#s.tab.
 
 
@@ -805,8 +803,9 @@ intersection([S|Sets]) ->
     lists:foldl(fun ordsets:intersection/2, S, Sets).
 
 
-
+%% @doc Combine purity and termination analysis.
 -spec propagate_both(dict(), options()) -> dict().
+
 propagate_both(Tab, Opts) ->
     Tp = propagate_purity(Tab, Opts),
     Tt = propagate_termination(Tab, Opts),
@@ -828,4 +827,69 @@ sup_at_least(Pp, Pt) when is_atom(Pp), is_atom(Pt) ->
     sup(Pp, Pt);
 sup_at_least(Pp, Pt) when is_atom(Pp) ->
     sup_at_least(Pt, Pp).
+
+
+%% @doc Analyse the minimum set of required modules from the PLT.
+%%
+%% If the PLT is to be updated, analyse any functions in the result
+%% table which are still unresolved, in case some of their dependencies
+%% are now present. It is presumably less expensive to blindly add
+%% these functions instead of checking exactly which ones have
+%% dependencies on the newly analysed modules. TODO Verify
+-spec analyse(dict(), purity_plt:plt(), options()) -> dict().
+
+analyse(Tab, Plt, Opts) ->
+    T =
+      case ?plt:result_table(Plt, Opts) of
+          error ->
+              %% No cached results, analyse the whole PLT.
+              replace_modules(?plt:info_table(Plt), Tab);
+          {ok, Res} ->
+              %% Remove any re-analysed modules first.
+              R1 = ?utils:delete_modules(Res, all_modules(Tab)),
+              R2 = add_dependencies(Tab, R1),
+              case ?utils:option(add_to_plt, Opts) of
+                  false -> R2;
+                  true  -> add_unresolved(R2, R1)
+              end
+      end,
+    propagate(T, Opts).
+
+
+%% @doc Replace any modules present in Table 1 with the values of Table 2.
+%% This is not a simple update operation, since we must also make sure
+%% that any deleted functions are removed as well.
+replace_modules(T1, T2) ->
+    ?utils:dict_update(?utils:delete_modules(T1, all_modules(T2)), T2).
+
+%% @doc Return a list of all the modules in a lookup table.
+all_modules(Tab) ->
+    lists:usort(dict:fold(
+            fun ({M,_,_}, _, Ms) -> [M|Ms]; (_, _, Ms) -> Ms end, [], Tab)).
+
+
+%% @doc Add any dependencies present in the PLT to the table.
+add_dependencies(T, R) ->
+    %% T and R are disjoint by now.
+    Ds = ?utils:dependencies(T, fun (K) -> dict:is_key(K, R) end),
+    ?utils:dict_store([{F, dict:fetch(F, R)} || F <- Ds], T).
+
+
+add_unresolved(T1, T2) ->
+    R1 = dict:filter(fun (_, {_, D}) -> D =/= [] end, T2),
+    %% R1 is not enough, we must collect any concrete dependencies
+    %% which are part of higher order calls and add them as well.
+    R2 = collect_higher_deps(R1, T2),
+    ?utils:dict_update(T1, R2).
+
+
+collect_higher_deps(T1, T2) ->
+    %% Only one pass is necessary, since *all* unresolved functions
+    %% have been added to the table in the previous pass.
+    dict:fold(
+        fun (_, {_, DL}, T) ->
+                Ds = ?utils:dependencies(DL, fun ?utils:is_mfa/1, true),
+                Vs = [{F, dict:find(F, T2)} || F <- Ds],
+                ?utils:dict_store([{F, V} || {F, {ok, V}} <- Vs], T) end,
+        T1, T1).
 

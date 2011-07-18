@@ -38,9 +38,9 @@
 -define(plt, purity_plt).
 
 
--export([module/3, modules/3, pmodules/3]).
+-export([module/1, files/1, pfiles/1]).
 
--export([propagate/2]).
+-export([propagate/2, propagate/3]).
 
 -export([module/2, is_pure/2, find_missing/1, analyse_changed/3]).
 
@@ -52,22 +52,32 @@
 -type options() :: purity_utils:options().
 
 
--spec module(cerl:c_module(), options(), dict()) -> dict().
-module(Core, Options, Table) ->
-    ?collect:module(Core, Options, Table).
+-spec module(cerl:c_module()) -> dict().
 
--spec modules([string()], options(), dict()) -> dict().
-modules(Modules, Options, Table) ->
-    ?collect:modules(Modules, Options, Table).
+module(Core) ->
+    ?collect:module(Core).
 
--spec pmodules([string()], options(), dict()) -> dict().
-pmodules(Modules, Options, Table) ->
-    ?collect:pmodules(Modules, Options, Table).
+-spec files([string()]) -> dict().
+
+files(Filenames) ->
+    ?collect:files(Filenames).
+
+-spec pfiles([string()]) -> dict().
+
+pfiles(Filenames) ->
+    ?collect:pfiles(Filenames).
 
 
 -spec propagate(dict(), options()) -> dict().
+
 propagate(Tab, Opts) ->
     ?analyse:propagate(Tab, Opts).
+
+
+-spec propagate(dict(), purity_plt:plt(), options()) -> dict().
+
+propagate(Tab, Plt, Opts) ->
+    ?analyse:analyse(Tab, Plt, Opts).
 
 
 %% @doc Simple purity test, only distinguishes between pure and impure.
@@ -88,21 +98,20 @@ is_pure({_,_,_} = MFA, Table) ->
 %% Analysis starts from parsed core erlang terms.
 %%
 %% @see is_pure/2
-%% @see module/3
-%% @see propagate/2
+%% @see module/1
+%% @see propagate/3
 -spec module(cerl:c_module(), options()) -> dict().
 
 module(Core, Options) ->
-    Plt = load_plt_silent(Options),
-    Tab = ?plt:table(Plt, Options),
-    Dep = ?collect:module(Core, Options, Tab),
-    Res = ?analyse:propagate(Dep, Options),
-    Res.
+    Tab = module(Core),
+    Plt = load_plt_no_errors(Options),
+    % TODO: Maybe update and save PLT as well.
+    propagate(Tab, Plt, Options).
 
 
 %% @doc Load a PLT from the provided options. If no PLT is found, or
 %% there are errors, return a new PLT.
-load_plt_silent(Opts) ->
+load_plt_no_errors(Opts) ->
     File = ?utils:option(plt, Opts, ?plt:default_path()),
     Check = not ?utils:option(no_check, Opts, false),
     case ?plt:load(File) of
@@ -139,7 +148,7 @@ find_missing(Table) ->
 -spec analyse_changed({[file:filename()], [file:filename()]},
                       options(), plt()) -> plt().
 
-analyse_changed({Changed, Errors}, Options, Plt) ->
+analyse_changed({Changed, Errors}, _Options, Plt) ->
     Combined = Changed ++ Errors,
     %% First strip the table of both changed and removed files, so that
     %% there are no left-over MFAs, e.g. when removing a function from a module.
@@ -154,7 +163,7 @@ analyse_changed({Changed, Errors}, Options, Plt) ->
     DF = [dict:fetch(M, Map) || M <- DM],
     %% Collect information on these modules, and create a new PLT. Naturally
     %% any cached result tables are dismissed.
-    ?plt:new(modules(DF, Options, T1), Files).
+    ?plt:new(?utils:dict_update(T1, files(DF)), Files).
 
 to_modules(Filenames) ->
     [?utils:filename_to_module(F) || F <- Filenames].

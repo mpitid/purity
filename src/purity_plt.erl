@@ -34,6 +34,7 @@
 -export([new/0, new/2, update/3, verify/1]).
 -export([version/1, table/2, info_table/1, result_table/2]).
 -export([dependent_modules/2, filenames/1]).
+-export([export/1, export_text/1]).
 
 -export_type([plt/0]).
 
@@ -212,9 +213,9 @@ dependent_modules(#plt{modules = Ms}, Filenames) ->
 -spec update(plt(), options(), {files(), dict(), dict()}) ->
     {ok, plt()} | {error, inconsistent_tables}.
 
-update(Plt, Options, {Filenames, Info, Result}) ->
-    #plt{cache = C0, checksums = CS0} = Plt,
-    case consistent(Info, Result) of
+update(Plt, Options, {Filenames, T, R}) ->
+    #plt{cache = C0, checksums = CS0, table = T0} = Plt,
+    case consistent(T, R) of
         false ->
             {error, inconsistent_tables};
         true ->
@@ -222,30 +223,56 @@ update(Plt, Options, {Filenames, Info, Result}) ->
             %% Keep track of any modules which should be removed from
             %% the tables because they cannot be checksumed.
             {CS1, CSErrors} = separate([{F, compute_checksum(F)} || F <- AbsFiles]),
-            ToPurge = [module(B) || B <- CSErrors],
+            Broken = [module(B) || B <- CSErrors],
+            Analysed = [module(F) || F <- Filenames],
 
             %% Update any previous checksums with the current ones,
             %% in case parts of the table are being re-analysed.
             %% The analysis itself should make sure the table is
             %% consistent with regard to such files.
-            CS = dict:to_list(dict_update(
-                    dict:from_list(CS0), dict:from_list(CS1))),
+            CS = update_checksums(CS0, CS1),
 
-            T1 = delete_modules(Info, ToPurge),
-            %% Keep only cached results which are still consistent,
-            %% and also remove any bad modules from them too.
-            C1 = assoc_store(cache_key(Options), Result,
-                             keep_consistent(C0, Info)),
-            C2 = purge_modules(C1, ToPurge),
-            {ok, Plt#plt{table = T1,
-                         cache = C2,
-                         modules = module_dependencies(T1),
+            Tn = update_table(T0, T, Analysed, Broken),
+
+            R0 = fetch_results(Options, C0),
+            Rn = update_table(R0, R, Analysed, Broken),
+
+            %% Keep only cached results which are still consistent, and
+            %% remove broken modules from all of them.
+            C1 = [{K, delete_modules(C, Broken)} ||
+                  {K, C} <- keep_consistent(C0, Tn)],
+            Cn = assoc_store(cache_key(Options), Rn, C1),
+
+            {ok, Plt#plt{table = Tn, cache = Cn,
+                         modules = module_dependencies(Tn),
                          checksums = CS}}
+         end.
+
+update_checksums(CS1, CS2) ->
+    dict:to_list(dict_update(
+            dict:from_list(CS1), dict:from_list(CS2))).
+
+fetch_results(O, C) ->
+    case assoc_find(cache_key(O), C) of
+        {ok, R} ->
+            R;
+        error ->
+            dict:new()
     end.
 
-
-purge_modules(Cache, Modules) ->
-    [{K, delete_modules(R, Modules)} || {K, R} <- Cache].
+%% @doc Updating a PLT table consists of the following steps:
+%% - Remove any re-analysed modules from the old table.
+%%   This is necessary in order to account for the removal of functions
+%%   in the re-analysed modules. Providing an explicit list of modules
+%%   based on the file list is important too, in order to work seamlessly
+%%   with result tables, which may contain arbitrary functions from the
+%%   old result table.
+%% - Update the resulting table with the new table.
+%% - Remove any broken modules from the result.
+update_table(Old, New, Modules, Broken) ->
+    T1 = delete_modules(Old, Modules),
+    T2 = dict_update(T1, New),
+    delete_modules(T2, Broken).
 
 keep_consistent(Cache, Info) ->
     lists:filter(fun ({_K, Result}) -> consistent(Info, Result) end, Cache).
@@ -253,6 +280,7 @@ keep_consistent(Cache, Info) ->
 %% @doc Since the analysis may add BIFs to the lookup table, just
 %% verify that Results is a superset of it.
 consistent(Info, Results) ->
+    %% set(keys(Info)) <= set(keys(Results))
     lists:all(fun (K) -> dict:is_key(K, Results) end,
               dict:fetch_keys(Info)).
 
@@ -326,4 +354,46 @@ assoc_store(Key, Value, [{Key, _Old}|T]) ->
 assoc_store(Key, Value, [H|T]) ->
     [H|assoc_store(Key, Value, T)].
 
+
+-spec export(plt()) -> {string(), [{_,_}], [{_,_}], [{_,_}], [{_,_}]}.
+
+%% @doc Export a PLT into a simple deterministic structure, useful
+%% for debugging.
+export(#plt{table = T, cache = C, checksums = CS, modules = Ms, version = V}) ->
+    {V, lists:keysort(2, [{md5hex(MD5), F} || {F, MD5} <- CS]),
+        lists:sort(dict:to_list(T)),
+        lists:sort([{K, lists:sort(dict:to_list(R))} || {K, R} <- C]),
+        lists:sort(dict:to_list(Ms))}.
+
+
+%% @doc Export a PLT as plain text.
+-spec export_text(plt()) -> [iolist()].
+
+export_text(Plt) ->
+    {Vsn, CS, T, R, M} = export(Plt),
+    P1 = fun (F) -> io_lib:format(F ++ "~n", []) end,
+    %% Converting to binary is necessary for large PLTs as character
+    %% lists are very wasteful with regard to memory.
+    P2 = fun (F, A) -> list_to_binary(io_lib:format(F ++ "~n", A)) end,
+    PL = fun (L) -> print(P2, "~s: ~w", L, fun ?utils:fmt_mfa/1) end,
+    [ P2("PLT ~s", [Vsn]),
+      P1("FILES"), print(P2, "~s: ~s", CS),
+      P1("TABLE"), PL(T),
+      [[P2("RES ~p", [K]), PL(V)] || {K, V} <- R],
+      P1("MOD"), print(P2, "~p: ~w", M) ].
+
+
+print(Print, Fmt, Items) ->
+    print(Print, Fmt, Items, fun (X) -> X end).
+
+print(Print, Fmt, Items, MapKey) ->
+    [Print(Fmt, [MapKey(K), V]) || {K, V} <- Items].
+
+
+%md5hex(<<MD5:128/unsigned>>) -> ?utils:str("~32.16.0b", [MD5]).
+md5hex(<<A:4/big-unsigned-integer-unit:8,
+         B:4/big-unsigned-integer-unit:8,
+         C:4/big-unsigned-integer-unit:8,
+         D:4/big-unsigned-integer-unit:8>>) ->
+    ?utils:str("~8.16.0b~8.16.0b~8.16.0b~8.16.0b", [A, B, C, D]).
 
