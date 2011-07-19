@@ -325,8 +325,8 @@ module_dependencies(T) ->
 
 reachable(Module, Map) ->
     case dict_fetch(Module, Map, []) of
-        [] -> [];
-        Ms -> sets:to_list(reachable(Ms, Map, sets:from_list(Ms)))
+        [] -> [Module];
+        Ms -> sets:to_list(reachable(Ms, Map, sets:from_list([Module|Ms])))
     end.
 
 reachable([], _Map, S) -> S;
