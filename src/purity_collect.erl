@@ -154,8 +154,7 @@ file(Filename, Table) ->
 -spec pfiles([file:filename()]) -> dict().
 
 pfiles(Filenames) when is_list(Filenames) ->
-    CPUs = erlang:system_info(logical_processors),
-    Tabs = ?utils:pmap({?MODULE, file}, [], Filenames, CPUs),
+    Tabs = ?utils:pmap({?MODULE, file}, [], Filenames),
     merge_dicts(lists:zip(to_modules(Filenames), Tabs)).
 
 %% @doc If the same module is provided more than once, keep the last occurence.
