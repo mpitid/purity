@@ -38,7 +38,7 @@
 
 -export_type([plt/0]).
 
--define(VERSION, "0.4").
+-define(VERSION, "0.5").
 
 -ifdef(TEST).
 -include("purity_plt_tests.hrl").
@@ -48,7 +48,6 @@
 
 -record(plt, {version   = ?VERSION   :: string(),
               checksums = []         :: [file_checksum()],
-              modules   = dict:new() :: dict(),
               table     = dict:new() :: dict(),
               cache     = []         :: [{term(), dict()}]}).
 
@@ -69,7 +68,6 @@ new() ->
 -spec new(dict(), files()) -> plt().
 new(Table, Filenames) ->
     #plt{table = Table,
-         modules = module_dependencies(Table),
          checksums = compute_checksums(absolute(Filenames))}.
 
 -spec table(plt(), options()) -> dict().
@@ -209,7 +207,9 @@ compute_checksum(Filename) ->
 %% @doc Provided a list of files, return a list of modules which depend
 %% on them and should be re-analysed.
 -spec dependent_modules(plt(), files()) -> [module()].
-dependent_modules(#plt{modules = Ms}, Filenames) ->
+
+dependent_modules(#plt{table = T}, Filenames) ->
+    Ms = ?utils:module_rmap(T),
     uflatten([reachable(module(F), Ms) || F <- Filenames]).
 
 
@@ -247,9 +247,7 @@ update(Plt, Options, {Filenames, T, R}) ->
                   {K, C} <- keep_consistent(C0, Tn)],
             Cn = assoc_store(cache_key(Options), Rn, C1),
 
-            {ok, Plt#plt{table = Tn, cache = Cn,
-                         modules = module_dependencies(Tn),
-                         checksums = CS}}
+            {ok, Plt#plt{table = Tn, cache = Cn, checksums = CS}}
          end.
 
 update_checksums(CS1, CS2) ->
@@ -318,11 +316,6 @@ relevant(_) ->
     false.
 
 
-%% @doc Reverse lookup table for inter-module dependencies, i.e.
-%% each key maps to the list of modules which depend on it.
-module_dependencies(T) ->
-    ?utils:module_rmap(T).
-
 reachable(Module, Map) ->
     case dict_fetch(Module, Map, []) of
         [] -> [Module];
@@ -362,22 +355,21 @@ assoc_store(Key, Value, [H|T]) ->
     [H|assoc_store(Key, Value, T)].
 
 
--spec export(plt()) -> {string(), [{_,_}], [{_,_}], [{_,_}], [{_,_}]}.
+-spec export(plt()) -> {string(), [{_,_}], [{_,_}], [{_,_}]}.
 
 %% @doc Export a PLT into a simple deterministic structure, useful
 %% for debugging.
-export(#plt{table = T, cache = C, checksums = CS, modules = Ms, version = V}) ->
+export(#plt{table = T, cache = C, checksums = CS, version = V}) ->
     {V, lists:keysort(2, [{md5hex(MD5), F} || {F, MD5} <- CS]),
         lists:sort(dict:to_list(T)),
-        lists:sort([{K, lists:sort(dict:to_list(R))} || {K, R} <- C]),
-        lists:sort(dict:to_list(Ms))}.
+        lists:sort([{K, lists:sort(dict:to_list(R))} || {K, R} <- C])}.
 
 
 %% @doc Export a PLT as plain text.
 -spec export_text(plt()) -> [iolist()].
 
 export_text(Plt) ->
-    {Vsn, CS, T, R, M} = export(Plt),
+    {Vsn, CS, T, R} = export(Plt),
     P1 = fun (F) -> io_lib:format(F ++ "~n", []) end,
     %% Converting to binary is necessary for large PLTs as character
     %% lists are very wasteful with regard to memory.
@@ -386,8 +378,7 @@ export_text(Plt) ->
     [ P2("PLT ~s", [Vsn]),
       P1("FILES"), print(P2, "~s: ~s", CS),
       P1("TABLE"), PL(T),
-      [[P2("RES ~p", [K]), PL(V)] || {K, V} <- R],
-      P1("MOD"), print(P2, "~p: ~w", M) ].
+      [[P2("RESULTS ~p", [K]), PL(V)] || {K, V} <- R] ].
 
 
 print(Print, Fmt, Items) ->
