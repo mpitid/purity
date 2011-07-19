@@ -163,7 +163,7 @@ analyse_changed({Changed, Errors}, _Options, Plt) ->
     DF = [dict:fetch(M, Map) || M <- DM],
     %% Collect information on these modules, and create a new PLT. Naturally
     %% any cached result tables are dismissed.
-    ?plt:new(?utils:dict_update(T1, files(DF)), Files).
+    ?plt:new(?utils:dict_update(T1, pfiles(DF)), Files).
 
 to_modules(Filenames) ->
     [?utils:filename_to_module(F) || F <- Filenames].

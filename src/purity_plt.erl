@@ -27,11 +27,11 @@
 
 -define(utils, purity_utils).
 
--import(?utils, [dict_fetch/3, dict_map/2, dict_update/2]).
+-import(?utils, [dict_fetch/3, dict_update/2]).
 -import(?utils, [str/2, uflatten/1]).
 
 -export([load/1, save/2, default_path/0]).
--export([new/0, new/2, update/3, verify/1]).
+-export([new/0, new/2, update/3, verify/1, verify_file/1]).
 -export([version/1, table/2, info_table/1, result_table/2]).
 -export([dependent_modules/2, filenames/1]).
 -export([export/1, export_text/1]).
@@ -166,16 +166,20 @@ verify(#plt{}) ->
     incompatible_version.
 
 verify_file_checksums(Sums) ->
-    lists:foldl(fun verify_file/2, {[], []}, Sums).
+    S = ?utils:pmap({?MODULE, verify_file}, [], Sums),
+    lists:foldl(
+        fun (ok, Acc) -> Acc;
+            ({m, F}, {Ms, Es}) -> {[F|Ms], Es};
+            ({e, F}, {Ms, Es}) -> {Ms, [F|Es]} end,
+        {[], []}, S).
 
-verify_file({F, C}, {Mismatches, Errors} = Failing) ->
+-spec verify_file(file_checksum()) -> ok | {m|e, file:filename()}.
+
+verify_file({F, C}) ->
     case compute_checksum(F) of
-        {ok, C} ->
-            Failing;
-        {ok, _Differs} ->
-            {[F|Mismatches], Errors};
-        {error, _Reason} ->
-            {Mismatches, [F|Errors]}
+        {ok, C} -> ok;
+        {ok, _Different} -> {m, F};
+        {error, _Reason} -> {e, F}
     end.
 
 
@@ -206,7 +210,7 @@ compute_checksum(Filename) ->
 %% on them and should be re-analysed.
 -spec dependent_modules(plt(), files()) -> [module()].
 dependent_modules(#plt{modules = Ms}, Filenames) ->
-    uflatten([dict_fetch(module(F), Ms, []) || F <- Filenames]).
+    uflatten([reachable(module(F), Ms) || F <- Filenames]).
 
 
 %% @doc Update the PLT with a new table and files.
@@ -317,10 +321,13 @@ relevant(_) ->
 %% @doc Reverse lookup table for inter-module dependencies, i.e.
 %% each key maps to the list of modules which depend on it.
 module_dependencies(T) ->
-    dict_map(fun sets:to_list/1, reachable(?utils:module_rmap(T))).
+    ?utils:module_rmap(T).
 
-reachable(Map) ->
-    dict_map(fun (Fs) -> reachable(Fs, Map, sets:from_list(Fs)) end, Map).
+reachable(Module, Map) ->
+    case dict_fetch(Module, Map, []) of
+        [] -> [];
+        Ms -> sets:to_list(reachable(Ms, Map, sets:from_list(Ms)))
+    end.
 
 reachable([], _Map, S) -> S;
 reachable([K|Ks], Map, S) ->

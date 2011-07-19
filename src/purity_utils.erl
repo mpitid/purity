@@ -40,7 +40,7 @@
 
 -export([emsg/1, emsg/2]).
 
--export([pmap/4]).
+-export([pmap/4, pmap/3]).
 
 -export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
 
@@ -303,6 +303,14 @@ emsg(Msg, Args) ->
 pmap({M, F}, Extra, List, N) ->
     Funs = [fun() -> apply(M, F, [Arg|Extra]) end || Arg <- List],
     pmap_init(Funs, N).
+
+%% @doc Convenience wrapper around pmap/4 which uses one process per
+%% logical processor.
+
+-spec pmap({module(), atom()}, [any()], [any()]) -> [any()].
+
+pmap(MF, Extra, List) ->
+    pmap(MF, Extra, List, erlang:system_info(logical_processors)).
 
 -record(pst, {num = 0,
               queue = [],
