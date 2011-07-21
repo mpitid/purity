@@ -97,7 +97,7 @@ dialyzer_plt:
 	$(DIALYZER) --build_plt --apps erts compiler dialyzer hipe kernel stdlib syntax_tools
 
 
-README.html: README TODO changelog
+README.html: README.asciidoc TODO changelog
 	asciidoc -a numbered $<
 
 # eDoc related stuff:
