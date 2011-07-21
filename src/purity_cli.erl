@@ -31,7 +31,7 @@
 -define(plt, purity_plt).
 -define(utils, purity_utils).
 
--import(?utils, [fmt_mfa/1, str/2]).
+-import(?utils, [fmt_mfa/1, str/2, option/2, option/3]).
 -import(?utils, [timeit/3, format_time/1, get_time/0]).
 
 %% @doc Parse any command line arguments, analyse all supplied files
@@ -73,9 +73,6 @@ main() ->
             timeit("Loading PLT", fun load_plt/1, [Options])
     end,
     {Table, Final} = do_analysis(Files, Options, Plt),
-
-    %io:format("sizeof(Table): ~p, ~p~n", [erts_debug:size(Table), erts_debug:flat_size(Table)]),
-    %io:format("sizeof(Final): ~p, ~p~n", [erts_debug:size(Final), erts_debug:flat_size(Final)]),
 
     %% An obvious problem with this approach is that we cannot close
     %% the opened file, but this is not important since the application
@@ -251,14 +248,6 @@ parse_args() ->
     cl_parser:parse_args(Spec, "usage: purity [options] file(s)", Extra).
 
 
-option(Name, Options) ->
-    proplists:get_value(Name, Options, false).
-
-
-option(Name, Options, Default) ->
-    proplists:get_value(Name, Options, Default).
-
-
 pretty_print(Print, {MFA, Result}) ->
     Print("~s ~s.~n", [fmt_mfa(MFA), fmt(Result)]).
 
@@ -334,3 +323,4 @@ get_lib_dir(Lib) ->
 
 flatten1(L) ->
     lists:foldl(fun lists:append/2, [], L).
+

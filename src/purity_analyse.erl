@@ -630,22 +630,6 @@ propagate_unhandled(#s{ws = [F|Fs]} = S) ->
     propagate_unhandled(set_unknown(F, S#s{ws = workset(Rs ++ Fs)})).
 
 
-% Decided not to mark these as unknown since they can be identified
-% as {at_least, P} by their non-empty dependency list. This way it is
-% possible to distinguish between truly unknown functions when for
-% instance the purity of a function is re-evaluated because one of
-% its missing dependencies has just been found.
-%other_unknown(#s{tab = T, unk = U0} = S) ->
-%    U1 = dict:fold(fun funs_with_non_empty_deplist/3, sets:new(), T),
-%    U2 = sets:from_list(dict:fold(fun collect_hofs/3, [], T)),
-%    S#s{unk = sets:union([U0, U1, U2])}.
-%
-%funs_with_non_empty_deplist(_, {_, []}, S) ->
-%    S;
-%funs_with_non_empty_deplist(F, {_, D}, S) when is_list(D) ->
-%    sets:add_element(F, S).
-
-
 %% @doc Change the purity of unknown functions from P to {at_least, P}.
 mark_unknown(#s{tab = T, unk = U} = S) ->
     S#s{tab = sets:fold(fun mark_unknown/2, T, U)}.
