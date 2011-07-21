@@ -7,8 +7,8 @@
 -mode(compile).
 
 main(Files) ->
-    T1 = purity:modules(Files, [], dict:new()),
-    T2 = purity:pmodules(Files, [], dict:new()),
+    T1 = purity:files(Files),
+    T2 = purity:pfiles(Files),
     lists:foreach(
         fun(Opts) ->
                 P1 = purity:propagate(T1, Opts),
@@ -28,6 +28,6 @@ compare(L, T1, T2) ->
             F2 = purity_utils:str("_d2-~p", [L]),
             runtest:dump_term(F1, T11),
             runtest:dump_term(F2, T22),
-            io:format("vimdiff -R ~s ~s~n", [F1, F2])
+            io:format("vimdiff -R '~s' '~s'~n", [F1, F2])
     end.
 

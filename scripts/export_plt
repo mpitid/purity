@@ -1,0 +1,9 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -pa ebin -sname export_plt
+%% vim: set ft=erlang ts=4 sw=4 et:
+
+main([PltFile, ExportFile]) ->
+    {ok, Plt} = purity_plt:load(PltFile),
+    ok = file:write_file(ExportFile, purity_plt:export_text(Plt)).
+

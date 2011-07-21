@@ -25,9 +25,9 @@
 
 -module(purity_utils).
 
--export([dependencies/3, module_rmap/1, function_rmap/1]).
+-export([dependencies/2, dependencies/3, module_rmap/1, function_rmap/1]).
 
--export([is_mfa/1, is_primop/1, is_expr/1]).
+-export([is_mfa/1, is_primop/1, is_expr/1, is_bif/1]).
 
 -export([delete_modules/2]).
 
@@ -40,9 +40,13 @@
 
 -export([emsg/1, emsg/2]).
 
--export([pmap/4]).
+-export([pmap/4, pmap/3]).
 
 -export([get_core/1, get_core/2, get_abstract_code_from_beam/1]).
+
+-export([option/2, option/3]).
+
+-export([timeit/2, timeit/3, format_time/1, timed/2, get_time/0]).
 
 
 -export_type([options/0, purity/0, purity_level/0, primop/0, emfa/0]).
@@ -81,7 +85,7 @@
                     | {local, mfa() | atom(), [argument()]}
                     | {free, atom(), [argument()]} %% Free variable.
                     | {primop, primop(), [argument()]}
-                    | {erl, 'catch' | {'receive', finite|infinite}}. %% Erlang expression.
+                    | expr().
 
 -type argument() :: {pos_integer(), mfa()} %% Concrete argument passed as argument.
                   %% The positions of an argument passed on to another call.
@@ -91,8 +95,19 @@
                   %% Used in termination analysis to detect terminating recursive functions.
                   | {sub, pos_integer()}.
 
+%% Extended MFAs which may include variables in place of modules/functions.
 -type emfa()   :: {module()|{var, atom()}, atom()|{var, atom()}, arity()}.
+
+%% Primitive operations: These are implementation dependent and
+%% their purity is hard-coded.
 -type primop() :: {atom(), arity()}.
+
+%% Erlang expressions influential to the analysis.
+%% The `catch' expression depends on the execution environment since it
+%% may contain part of the expression's stack trace.
+%% The distinction between finite and infinite receive expressions is
+%% included for the sake of termination analysis only.
+-type expr()   :: {erl, 'catch' | {'receive', finite | infinite}}.
 
 
 -spec module_rmap(dict()) -> dict().
@@ -138,6 +153,18 @@ dependencies(DepList, Filter, Higher) when is_list(DepList) ->
 common_dependencies(D) ->
     is_mfa(D) orelse is_primop(D) orelse is_expr(D).
 
+
+%% @doc Higher level dependency collectors which work on an entire lookup table.
+-spec dependencies(dict(), fun((term()) -> boolean())) -> [term()].
+
+dependencies(Table, Filter) ->
+    uflatten(dict:fold(dep_collector(Filter), [], Table)).
+
+%% @doc Create a function to collect any dependencies passing the filter.
+dep_collector(Filter) ->
+    fun (_, V, Ds) -> [dependencies(V, Filter, true)|Ds] end.
+
+
 %% Dependency filters.
 
 -spec is_mfa(term()) -> boolean().
@@ -158,6 +185,9 @@ is_expr({erl, _}) ->
 is_expr(_) ->
     false.
 
+-spec is_bif(term()) -> boolean().
+is_bif(Fun) ->
+    (is_mfa(Fun) orelse is_primop(Fun)) andalso purity_bifs:is_known(Fun).
 
 %% @doc Remove any functions belonging to Modules from the Table.
 
@@ -230,9 +260,11 @@ str(Fmt, Args) ->
     lists:flatten(io_lib:format(Fmt, Args)).
 
 
--spec fmt_mfa(emfa() | primop()) -> string().
+-spec fmt_mfa(emfa() | primop() | expr()) -> string().
 fmt_mfa({M, F, A}) -> % emfa
     str("~p:~p/~b", [M, F, A]);
+fmt_mfa({erl,_} = E) -> % expr
+    str("~p", [E]);
 fmt_mfa({P, A}) -> % primop
     str("~p:/~b", [P, A]).
 
@@ -271,6 +303,14 @@ emsg(Msg, Args) ->
 pmap({M, F}, Extra, List, N) ->
     Funs = [fun() -> apply(M, F, [Arg|Extra]) end || Arg <- List],
     pmap_init(Funs, N).
+
+%% @doc Convenience wrapper around pmap/4 which uses one process per
+%% logical processor.
+
+-spec pmap({module(), atom()}, [any()], [any()]) -> [any()].
+
+pmap(MF, Extra, List) ->
+    pmap(MF, Extra, List, erlang:system_info(logical_processors)).
 
 -record(pst, {num = 0,
               queue = [],
@@ -375,4 +415,65 @@ get_abstract_code_from_beam(Filename) ->
             %% No or unsuitable abstract code.
             error
     end.
+
+
+-spec option(atom(), options()) -> term().
+
+option(Name, Options) -> option(Name, Options, false).
+
+-spec option(atom(), options(), term()) -> term().
+
+option(Name, Options, Default) ->
+    proplists:get_value(Name, Options, Default).
+
+
+-type time() :: non_neg_integer().
+
+%% @doc Report the execution time of a function.
+%% @see timeit/2
+%% @see timed/2
+
+-spec timeit(string(), fun(), [term()]) -> term().
+
+timeit(Msg, Fun, Args) ->
+    io:format("~-22s... ", [Msg]),
+    {T, R} = timed(Fun, Args),
+    io:format("done in ~s~n", [format_time(T)]),
+    R.
+
+%% @doc Convenience shortcut to `timeit/3' for a function without arguments.
+-spec timeit(string(), fun(() -> T)) -> T.
+
+timeit(Msg, Fun) ->
+    timeit(Msg, Fun, []).
+
+
+%% @doc Format time in miliseconds to Minutes Seconds.Miliseconds.
+
+-spec format_time(time()) -> string().
+
+format_time(T) ->
+    str("~bm~5.2.0fs", [T div 60000, (T rem 60000) / 1000]).
+
+
+%% @doc Time the execution of a specified function, relying on
+%% erlang:statistics/1 calls instead of erlang:now/0.
+
+-spec timed(fun(), [term()]) -> {time(), term()}.
+
+timed(Fun, Args) ->
+    T1 = get_time(),
+    Rt = apply(Fun, Args),
+    T2 = get_time(),
+    {T2 - T1, Rt}.
+
+
+-spec get_time() -> time().
+
+get_time() ->
+    {T0, _} =
+      case get(statistics) of
+        undefined -> statistics(wall_clock);
+        StatsType -> statistics(StatsType)
+      end, T0.
 
