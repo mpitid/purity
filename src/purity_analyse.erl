@@ -307,36 +307,33 @@ set_mutual_purity(Fs, T) ->
 
 %% @doc Locate independent components in the call graph.
 %%
-%% Independent components are strongly connected components without
-%% dependencies to other SCCs. Specifically, we are interested in the
-%% subset of those components which form a cycle between them, i.e.
-%% represent mutually recursive functions. These components will be any
-%% vertices of the condensed graph with a loop. The relation they
-%% satisfy is more accurately the following:
-%%   `out_neighbours(V) == [V] and member(V, in_neighbours(V))'
-%% Since we are only interested in condensed vertices with at least 2
-%% elements, which can be pattern matched, the condition is then
-%% simplified to `out_degree(V) == 1'.
+%% The strongly connected components (SCCs) of the call graph represent
+%% groups of mutually recursive functions. "Independent" components are
+%% those SCCs with no outgoing edges to other groups. Thus, to resolve
+%% the purity of these components we only require information present in
+%% the group itself.
+%%
+%% A graph condensation creates a new graph with the SCCs as the vertices,
+%% and is therefore a natural way to locate these groups. In particular,
+%% the independent components are those vertices in the condensed graph
+%% with no outgoing edges.
 locate_iccs(G) ->
     with_graph(digraph_utils:condensation(G), fun select_iccs/1).
 
 select_iccs(G) ->
     [V || [_,_|_] = V <- digraph:vertices(G),
-        1 =:= digraph:out_degree(G, V),
-        assert_independence(G, V)].
+        is_independent(G, V)].
 
--ifdef(NOASSERT).
-assert_independence(_, _) -> true.
--else.
-assert_independence(G, V) ->
-    In = digraph:in_neighbours(G, V),
-    Out = digraph:out_neighbours(G, V),
-    [V] = Out,
-    %% Only when length(In) > 1 will the algorithm progress
-    %% afterwards. This could be exploited, but the gain is
-    %% marginal, the current bottleneck is the first contamination.
-    true = lists:member(V, In).
--endif.
+is_independent(G, V) ->
+    case digraph:out_neighbours(G, V) of
+        []  -> true;
+        %% In OTP versions prior to R15, `digraph_utils:condensation/1'
+        %% had a bug which resulted in `loops' in the resulting graph.
+        %% Detect and handle this case too.
+        [V] -> true = lists:member(V, digraph:in_neighbours(G, V));
+        _   -> false
+    end.
+
 
 build_call_graph(Table) ->
     dict:fold(fun build_call_graph/3, digraph:new(), Table).
