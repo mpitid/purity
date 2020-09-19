@@ -31,7 +31,7 @@ def main(argv):
     with open(filename, 'rb') as fd:
         opts, data = extract(fd)
     for i, (k, v) in enumerate(data):
-        print write_tests(outfile(outdir, module, i), opts, k, v)
+        print (write_tests(outfile(outdir, module, i), opts, k, v))
     return 0
 
 def outfile(dir, mod, n):
@@ -41,7 +41,7 @@ def write_tests(filename, gopts, opts, data):
     assert not os.path.exists(filename), "file exists %r" % filename
     with open(filename, 'w') as fd:
         fd.write("{%s,\n" % merge_opts(gopts, opts))
-        data = ["{%s,%s}" % (f, v) for (f,v) in data.iteritems()]
+        data = ["{%s,%s}" % (f, v) for (f,v) in data.items()]
         fd.write(" [" + "\n ,".join(data) + "]}.\n")
     return filename
 
@@ -65,14 +65,14 @@ def merge_tests(tests):
     """Fill incomplete tests with the corresponding default test."""
     common = tests[None]
     keys = set(k for v in tests.values() for k in v.keys())
-    for k, v in tests.iteritems():
+    for k, v in tests.items():
         for k in keys:
             if k not in v and common: # Can't do anything if no common case exists.
                 v[k] = common[k]
     if not common:
         # Remove it, it was just created by the defaultdict.
         del tests[None]
-    return tuple(tests.iteritems())
+    return tuple(tests.items())
 
 def merge_opts(*opts):
     """Merge a list of option lists into a single option list."""
@@ -80,18 +80,18 @@ def merge_opts(*opts):
     return "[%s]" % (','.join(opt[1:-1] for opt in opts if opt))
 
 def is_test(text):
-    return "%<" in text
+    return "%<" in text.decode()
 
 def is_global(text):
     assert is_test(text)
-    return text.lstrip(" %<").startswith("global")
+    return text.decode().lstrip(" %<").startswith("global")
 
 def parse_global(text):
-    return text.replace("global", "").lstrip(" %<")
+    return text.decode().replace("global", "").lstrip(" %<")
 
 def parse_test(text):
     rgx = re.compile("(?:(\[[^]]*\])\s+)?([^ ]+)\s+(.+)\s*$")
-    return rgx.match(text.lstrip(' %<')).groups()
+    return rgx.match(text.decode().lstrip(' %<')).groups()
 
 def parse_fun(fun):
     """Convert fun/arity specifications to {module,fun,arity}."""
