@@ -82,13 +82,13 @@ main() ->
     Print = case option(output, Options) of
         false ->
             fun io:format/2;
-        Filename ->
-            case file:open(Filename, [write]) of
+        Filename0 ->
+            case file:open(Filename0, [write]) of
                 {ok, Io} ->
                     fun(Fmt, Args) -> io:format(Io, Fmt, Args) end;
                 {error, Reason} ->
                     io:format("Could not open file ~p for writing (~p)~n", [
-                            Filename, Reason]),
+                            Filename0, Reason]),
                     fun io:format/2
             end
     end,
