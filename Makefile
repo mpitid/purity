@@ -58,7 +58,7 @@ $(EBIN)/%.beam: $(ESRC)/%.erl
 
 $(TEST)/%.beam: $(TEST)/%.erl
 	@echo "T  ERLC $<"
-	@$(ERLC) $(EFLAGS) -o $(dir $<) $<
+	@$(ERLC) $(EFLAGS) +nowarn_export_all -o $(dir $<) $<
 
 #.erl.beam:
 %.beam: %.erl
