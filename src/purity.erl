@@ -175,7 +175,7 @@ load_plt_silent(Opts) ->
 
 %% State record for propagation of dependency lists to pureness values.
 -record(pst, {funs = []         :: [mfa()],
-              prev = sets:new() :: set(),
+              prev = sets:new() :: sets:set(),
               revs              :: dict:dict(),
               rsns = false      :: boolean(),
               cycles            :: dict:dict(),

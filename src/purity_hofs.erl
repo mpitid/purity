@@ -38,7 +38,7 @@
 -record(lst, {tab                   :: dict:dict(),
               rev                   :: dict:dict(),
               graph                 :: digraph(),
-              closed = sets:new()   :: set()}).
+              closed = sets:new()   :: sets:set()}).
 
 
 %% @doc Build a directed graph representing calls to higher order functions,
