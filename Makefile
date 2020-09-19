@@ -5,7 +5,7 @@
 ERLC ?= erlc
 DIALYZER ?= dialyzer
 
-EFLAGS += -DVSN='"$(VSN)"' +debug_info +warn_exported_vars +warn_unused_vars +warn_unused_import +warn_missing_spec
+EFLAGS += -DVSN='"$(VSN)"' +debug_info +warn_exported_vars +warn_unused_vars +warn_unused_import +nowarn_missing_spec
 DFLAGS += -n -Wunmatched_returns -Wunderspecs -Wrace_conditions -Wbehaviours
 
 ESRC ?= src
