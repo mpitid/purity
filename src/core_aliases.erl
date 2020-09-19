@@ -40,7 +40,7 @@
 %%   <cor1, cor2> when true -> match_fail'
 %% will produce a mapping of `{Pred, cor1}', `{List, cor2}' and `{cor3, cor2}'.
 
--spec scan(cerl:c_fun()) -> dict().
+-spec scan(cerl:c_fun()) -> dict:dict().
 
 scan(Fun) ->
     true = cerl:is_c_fun(Fun),
@@ -85,7 +85,7 @@ collect_aliases(Tree, VarMap) ->
 %% @doc Return a reverse mapping of the associative list KeyVals.
 %% Any elements which have multiple associations, are omitted.
 
--spec reverse_map([{name(), name()}]) -> dict().
+-spec reverse_map([{name(), name()}]) -> dict:dict().
 
 reverse_map(KeyVals) ->
     Acc = {dict:new(), []},
@@ -93,7 +93,7 @@ reverse_map(KeyVals) ->
     lists:foldl(fun(K, D) -> dict:erase(K, D) end, Dict, ToPurge).
 
 
--spec add_rev_unique({name(), name()}, {dict(), [name()]}) -> {dict(), [name()]}.
+-spec add_rev_unique({name(), name()}, {dict:dict(), [name()]}) -> {dict:dict(), [name()]}.
 
 add_rev_unique({Key, Key}, Acc) ->
     Acc;

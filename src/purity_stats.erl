@@ -38,7 +38,7 @@
 -type mod_stats() :: {module(), stats()}.
 
 %% @doc Generate an assoc list of modules and their statistics.
--spec gather([module()], dict()) -> [mod_stats()].
+-spec gather([module()], dict:dict()) -> [mod_stats()].
 
 gather(Modules, Table) ->
     Ms = sets:from_list(Modules),

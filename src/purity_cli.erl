@@ -264,7 +264,7 @@ pretty_print(Print, {MFA, Result}) ->
     Print("~s ~s.~n", [fmt_mfa(MFA), fmt(Result)]).
 
 
--spec print_missing(fun((_,_) -> ok), dict()) -> ok.
+-spec print_missing(fun((_,_) -> ok), dict:dict()) -> ok.
 
 print_missing(Print, Table) ->
     {Funs, Primops} = purity:find_missing(Table),

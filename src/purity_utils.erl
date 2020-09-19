@@ -73,7 +73,7 @@ is_not_arg(_) ->
 %% @doc Return a mapping of modules to a list of modules that
 %% may have dependencies on them.
 
--spec rev_mod_deps(dict()) -> dict().
+-spec rev_mod_deps(dict:dict()) -> dict:dict().
 
 rev_mod_deps(Table) ->
     dict:map(
@@ -91,7 +91,7 @@ rev_mod_deps(_NonMFA, _Val, Deps) ->
 
 %% @doc Return a mapping of functions or primops to a list of
 %% functions their purity depends on.
--spec rev_deps(dict()) -> dict().
+-spec rev_deps(dict:dict()) -> dict:dict().
 
 rev_deps(Table) ->
     dict:map(
@@ -183,7 +183,7 @@ is_special(_) ->
 
 %% Faster than dict:append, in case order is not important.
 
--spec dict_cons(term(), term(), dict()) -> dict().
+-spec dict_cons(term(), term(), dict:dict()) -> dict:dict().
 
 dict_cons(Key, Val, Dict) ->
     dict:update(Key, fun(Old) -> [Val|Old] end, [Val], Dict).
@@ -279,7 +279,7 @@ fmt_mfa({F, A}) ->
 
 %% @doc Remove any functions belonging to Modules from the Table.
 
--spec delete_modules(dict(), [module()]) -> dict().
+-spec delete_modules(dict:dict(), [module()]) -> dict:dict().
 
 delete_modules(Table, []) ->
     Table;

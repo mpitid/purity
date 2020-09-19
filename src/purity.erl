@@ -71,7 +71,7 @@
 -type map_val() :: mfa() | pos_integer().
 -type map()     :: [{map_key(), map_val()}].
 
--type sub() :: {dict(), dict()}.
+-type sub() :: {dict:dict(), dict:dict()}.
 
 -type pure()    :: true
                  | false | {false, string() | binary()}
@@ -79,11 +79,11 @@
                  | undefined.
 
 
-%% @spec is_pure(mfa(), dict()) -> boolean()
+%% @spec is_pure(mfa(), dict:dict()) -> boolean()
 %%
 %% @doc Simple purity test, only distinguishes between pure and impure.
 %% Any function missing from the lookup table is also considered impure.
--spec is_pure(mfa(), dict()) -> boolean().
+-spec is_pure(mfa(), dict:dict()) -> boolean().
 
 is_pure({_,_,_} = MFA, Table) ->
     case dict:find(MFA, Table) of
@@ -93,7 +93,7 @@ is_pure({_,_,_} = MFA, Table) ->
             false
     end.
 
-%% @spec module(cerl:c_module(), purity_utils:options()) -> dict()
+%% @spec module(cerl:c_module(), purity_utils:options()) -> dict:dict()
 %%
 %% @doc Analyse a module and return a lookup table of concrete results,
 %% indexed by `{Module, Function, Arity}'.
@@ -103,7 +103,7 @@ is_pure({_,_,_} = MFA, Table) ->
 %% @see is_pure/2
 %% @see module/3
 %% @see propagate/2
--spec module(cerl:c_module(), purity_utils:options()) -> dict().
+-spec module(cerl:c_module(), purity_utils:options()) -> dict:dict().
 
 module(Core, Options) ->
     Plt = load_plt_silent(Options),
@@ -162,13 +162,13 @@ load_plt_silent(Opts) ->
                 vars    = map_new()  :: map(),
                 args    = map_new()  :: map(),
                 subs    = sub_new()  :: sub(),
-                aliases = dict:new() :: dict(),
+                aliases = dict:new() :: dict:dict(),
                 free    = []         :: [cerl:var_name()],
                 nested  = []         :: [mfa()],
                 count   = 1          :: pos_integer(),
                 names   = []         :: [atom()],
                 opts    = []         :: [any()],
-                table   = dict:new() :: dict()}).
+                table   = dict:new() :: dict:dict()}).
 
 -type state() :: #state{}.
 
@@ -176,16 +176,16 @@ load_plt_silent(Opts) ->
 %% State record for propagation of dependency lists to pureness values.
 -record(pst, {funs = []         :: [mfa()],
               prev = sets:new() :: set(),
-              revs              :: dict(),
+              revs              :: dict:dict(),
               rsns = false      :: boolean(),
-              cycles            :: dict(),
-              table             :: dict()}).
+              cycles            :: dict:dict(),
+              table             :: dict:dict()}).
 
 
 %% @doc Return a list of MFAs and a list of primops for which we have no
 %% pureness information.
 
--spec find_missing(dict()) -> {[mfa()], [purity_utils:primop()]}.
+-spec find_missing(dict:dict()) -> {[mfa()], [purity_utils:primop()]}.
 
 find_missing(Table) ->
     Set1 = ordsets:from_list(collect_function_deps(Table)),
@@ -252,7 +252,7 @@ make_modlookup(Filenames) ->
     fun(Mod) -> dict:find(Mod, Map) end.
 
 
-%% @spec module(cerl:c_module(), options(), dict()) -> dict()
+%% @spec module(cerl:c_module(), options(), dict:dict()) -> dict:dict()
 %%
 %% @doc Analyse a module and return a lookup table of functions
 %% and dependencies, indexed by `{Module, Function, Arity}'.
@@ -261,7 +261,7 @@ make_modlookup(Filenames) ->
 %%
 %% @see modules/3
 
--spec module(cerl:c_module(), purity_utils:options(), dict()) -> dict().
+-spec module(cerl:c_module(), purity_utils:options(), dict:dict()) -> dict:dict().
 
 module(Core, Options, Tab0) ->
     Module = cerl:concrete(cerl:module_name(Core)),
@@ -288,7 +288,7 @@ module(Core, Options, Tab0) ->
 %%
 %% @see module/3
 
--spec modules([string()], purity_utils:options(), dict()) -> dict().
+-spec modules([string()], purity_utils:options(), dict:dict()) -> dict:dict().
 
 modules(Modules, Options, Tab0) when is_list(Modules) ->
     lists:foldl(
@@ -310,7 +310,7 @@ modules(Modules, Options, Tab0) when is_list(Modules) ->
 %% @see module/3
 %% @see modules/3
 
--spec pmodules([file:filename()], purity_utils:options(), dict()) -> dict().
+-spec pmodules([file:filename()], purity_utils:options(), dict:dict()) -> dict:dict().
 
 pmodules(Modules, Options, Tab0) when is_list(Modules) ->
     CPUs = erlang:system_info(logical_processors),
@@ -344,7 +344,7 @@ ungroup(Tab) ->
               dict:new(), Tab).
 
 
--spec panalyse(file:filename(), purity_utils:options()) -> dict().
+-spec panalyse(file:filename(), purity_utils:options()) -> dict:dict().
 
 panalyse(Filename, Options) ->
     Tab = dict:new(),
@@ -996,7 +996,7 @@ sub_new() -> {dict:new(), dict:new()}.
 %% @see propagate_purity/2
 %% @see propagate_termination/2
 
--spec propagate(dict(), purity_utils:options()) -> dict().
+-spec propagate(dict:dict(), purity_utils:options()) -> dict:dict().
 
 propagate(Tab, Opts) ->
     case option(both, Opts) of
@@ -1015,7 +1015,7 @@ propagate(Tab, Opts) ->
 %% @doc Combine the propagation into one function, which is
 %% significantly faster. First perform an impure purity propagation,
 %% and then run the termination analysis.
--spec propagate_both(dict(), purity_utils:options()) -> dict().
+-spec propagate_both(dict:dict(), purity_utils:options()) -> dict:dict().
 
 propagate_both(Tab0, Opts) ->
     Tab1 = merge(add_bifs(Tab0), dict:from_list(?PREDEF)),
@@ -1057,7 +1057,7 @@ collect_impure(F, V, A) ->
 %% cases of functions which consume one of their arguments are
 %% also detected and considered terminating.
 
--spec propagate_termination(dict(), purity_utils:options()) -> dict().
+-spec propagate_termination(dict:dict(), purity_utils:options()) -> dict:dict().
 
 propagate_termination(Tab0, Opts) ->
     %% All BIFs are considered terminating, but we have to keep track
@@ -1088,7 +1088,7 @@ recursive_functions(Tab) ->
     [F || C <- digraph_utils:cyclic_strong_components(dependency_graph(Tab)),
           F <- C].
 
-%% @spec propagate_purity(dict(), purity_utils:options()) -> dict()
+%% @spec propagate_purity(dict:dict(), purity_utils:options()) -> dict:dict()
 %%
 %% @doc Return a version of the lookup table with dependencies
 %% converted to concrete results.
@@ -1100,7 +1100,7 @@ recursive_functions(Tab) ->
 %% @see module/3
 %% @see modules/3
 
--spec propagate_purity(dict(), purity_utils:options()) -> dict().
+-spec propagate_purity(dict:dict(), purity_utils:options()) -> dict:dict().
 
 propagate_purity(Tab0, Opts) ->
     Vs =
@@ -1254,7 +1254,7 @@ converge_pst(Fun, #pst{table = Tab} = St0) ->
             converge_pst(Fun, St1)
     end.
 
-%% @doc Return two lists of functions with concrete values, one for 
+%% @doc Return two lists of functions with concrete values, one for
 %% pure and one for impure ones.
 collect_concrete(Tab) ->
     dict:fold(fun collect_concrete/3, {[], []}, Tab).
