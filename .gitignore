@@ -5,6 +5,7 @@
 *~
 ebin/*.app
 src/purity_bifs.erl
+_build
 
 # Documentation related:
 doc/edoc-info
