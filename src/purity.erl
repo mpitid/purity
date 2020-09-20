@@ -69,7 +69,7 @@
 
 -type map_key() :: cerl:var_name().
 -type map_val() :: mfa() | pos_integer().
--type map()     :: [{map_key(), map_val()}].
+-type kv_map()  :: [{map_key(), map_val()}].
 
 -type sub() :: {dict:dict(), dict:dict()}.
 
@@ -159,8 +159,8 @@ load_plt_silent(Opts) ->
 %%            value or a context.
 -record(state, {mfa     = undefined  :: mfa() | undefined,
                 ctx     = ctx_new()  :: [context()],
-                vars    = map_new()  :: map(),
-                args    = map_new()  :: map(),
+                vars    = map_new()  :: kv_map(),
+                args    = map_new()  :: kv_map(),
                 subs    = sub_new()  :: sub(),
                 aliases = dict:new() :: dict:dict(),
                 free    = []         :: [cerl:var_name()],
@@ -948,11 +948,11 @@ lookup_arg(Name, #state{args = ArgMap} = St) ->
 map_new() ->
     [].
 
--spec map_add(map_key(), map_val(), map()) -> map().
+-spec map_add(map_key(), map_val(), kv_map()) -> kv_map().
 map_add(Key, Val, Map) ->
     [{Key, Val}|Map].
 
--spec map_lookup(map_key(), map()) -> error | {ok, map_val()}.
+-spec map_lookup(map_key(), kv_map()) -> error | {ok, map_val()}.
 map_lookup(Key, Map) ->
     case lists:keyfind(Key, 1, Map) of
         false ->
