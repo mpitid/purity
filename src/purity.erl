@@ -178,7 +178,7 @@ load_plt_silent(Opts) ->
               prev = sets:new() :: sets:set(),
               revs              :: dict:dict(),
               rsns = false      :: boolean(),
-              cycles            :: dict:dict(),
+              cycles            :: undefined | dict:dict(),
               table             :: dict:dict()}).
 
 
