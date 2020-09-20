@@ -16,6 +16,7 @@ main(Tests) ->
     end.
 
 test(Filename) ->
+    true = code:add_path("ebin"),
     Module = list_to_atom(filename:rootname(filename:basename(Filename))),
     io:format("~s~n", [Module]),
     eunit:test({inparallel, Module}).
