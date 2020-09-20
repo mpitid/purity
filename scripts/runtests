@@ -23,7 +23,7 @@ runtest() { erl_exec runtest main $@ }
 passed() { ((P++)); rm $1 }
 failed() { ((F++)) }
 report() {
-    if ((F>0)); then echo "$F/$((P+F)) TESTS FAILED"
+    if ((F>0)); then echo "$F/$((P+F)) TESTS FAILED" ; exit 1
     else echo "ALL $P TESTS PASSED"; fi
 }
 
