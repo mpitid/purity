@@ -5,6 +5,7 @@
 %% as running it sequentially.
 
 main(Files) ->
+    true = code:add_path("ebin"),
     T1 = purity:modules(Files, [], dict:new()),
     T2 = purity:pmodules(Files, [], dict:new()),
     lists:foreach(
