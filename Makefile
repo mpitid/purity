@@ -19,7 +19,7 @@ VSN := $(PURITY_VSN)
 FILES := purity purity_utils purity_cli purity_plt purity_stats core_aliases cl_parser purity_bifs purity_hofs runtest
 SRC   := $(addsuffix .erl, $(FILES))
 BIN   := $(addprefix $(EBIN)/, $(addsuffix .beam, $(FILES)))
-CHEATS := predef/cheats predef/bifs predef/primops
+CHEATS := predef/cheats predef/bifs predef/primops scripts/purity_bifs
 
 APP_FILE := purity.app
 APP_SRC  := $(APP_FILE).src
