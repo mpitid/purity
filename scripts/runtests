@@ -13,7 +13,7 @@ main() {
             runtest $test $exp $dir && passed $exp || failed
         done
     done
-    rmdir $dir
+    rmdir --ignore-fail-on-non-empty $dir
     report
 
     extra_tests
