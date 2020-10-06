@@ -13,5 +13,5 @@ otp_release:
 script:
   - rebar3 xref
   - rebar3 dialyzer
-  - rebar3 tests
-  - rebar3 units
+  - make distclean ebin units
+  - make distclean ebin tests
