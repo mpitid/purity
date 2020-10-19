@@ -1,0 +1,17 @@
+language: erlang
+
+os:
+  - linux
+
+otp_release:
+   - 19.3
+   - 20.3
+   - 21.3
+   - 22.3
+   - 23.0
+
+script:
+  - rebar3 xref
+  - rebar3 dialyzer
+  - make distclean ebin units
+  - make distclean ebin tests

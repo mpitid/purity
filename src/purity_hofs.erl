@@ -35,10 +35,10 @@
 %%% on such `indirecty' higher order functions.
 %%%
 
--record(lst, {tab                   :: dict(),
-              rev                   :: dict(),
-              graph                 :: digraph(),
-              closed = sets:new()   :: set()}).
+-record(lst, {tab                   :: dict:dict(),
+              rev                   :: dict:dict(),
+              graph                 :: digraph:graph(),
+              closed = sets:new()   :: sets:set()}).
 
 
 %% @doc Build a directed graph representing calls to higher order functions,
@@ -46,7 +46,7 @@
 %% argument is expected. Vertices are MFAs while edges are labeled with the
 %% a {From, To} tuple regarding the argument in question.
 %% Limited to functions with a single function as argument at the moment.
--spec make_arg_graph(dict(), dict()) -> digraph().
+-spec make_arg_graph(dict:dict(), dict:dict()) -> digraph:graph().
 make_arg_graph(Table, Reverse) ->
     Graph = digraph:new([acyclic]),
     %% The initial set of functions are those which directly
@@ -144,7 +144,7 @@ ctx_get_args(Ctx, {_,_,_} = Fun) when is_list(Ctx) ->
 %% This should produce the following graph:
 %%   F2 --1--> F1
 %% Which can be used to resolve the purity of F3 to pure.
--spec test_make_arg_graph() -> {dict(), digraph()}.
+-spec test_make_arg_graph() -> {dict:dict(), digraph:graph()}.
 test_make_arg_graph() ->
     F1 = {m,f1,3},
     F2 = {m,f2,3},
@@ -162,7 +162,7 @@ test_make_arg_graph() ->
 %%% === Analysis === %%%
 
 -type resolution() :: {resolved, pure | impure} | unresolved.
--spec higher_analysis(mfa(), term(), dict(), digraph()) -> resolution().
+-spec higher_analysis(mfa(), term(), dict:dict(), digraph:graph()) -> resolution().
 
 higher_analysis(_Fun, [{_Type, {_,_,_} = Dep, [{N, {_,_,_} = Arg}]}], Table, G) ->
     case dict:find(Dep, Table) of
@@ -272,7 +272,7 @@ test_higher_analysis() ->
 
 %% @doc Write a representation of the specified graph in the
 %% dot language, suitable for processing with graphviz.
--spec to_dot(digraph(), file:filename()) -> ok.
+-spec to_dot(digraph:graph(), file:filename()) -> ok.
 
 to_dot(Graph, Filename) ->
     hipe_dot:translate_digraph(Graph, Filename, "ArgGraph",

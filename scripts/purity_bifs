@@ -40,10 +40,10 @@ header() {
 
 %% Dialyzer complains of supertypes.
 %-spec is_pure(atom(), atom(), arity()) -> purity:pure() | unknown.
--spec is_known(atom(), atom(), arity()) -> boolean().
+%-spec is_known(atom(), atom(), arity()) -> boolean().
 
 %-spec is_pure(atom(), arity()) -> purity:pure() | unknown.
--spec is_known(atom(), arity()) -> boolean().
+%-spec is_known(atom(), arity()) -> boolean().
 
 EOF
 }

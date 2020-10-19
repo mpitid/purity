@@ -5,6 +5,7 @@
 %% both analyses separately and combining the results.
 
 main(Files) ->
+    true = code:add_path("ebin"),
     Tab = purity:modules(Files, [], dict:new()),
     lists:foreach(
         fun(L) ->

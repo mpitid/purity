@@ -5,6 +5,7 @@
 *~
 ebin/*.app
 src/purity_bifs.erl
+_build
 
 # Documentation related:
 doc/edoc-info
@@ -16,6 +17,8 @@ README.html
 
 # Byproducts of coredump script:
 *.{core,dump,labl}
+erl_crash.dump
+rebar3.crashdump
 
 # etags
 TAGS

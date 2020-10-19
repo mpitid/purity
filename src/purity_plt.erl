@@ -42,9 +42,9 @@
 
 -record(plt, {version   = ?VERSION   :: string(),
               checksums = []         :: [file_cksum()],
-              mod_deps  = dict:new() :: dict(),
-              table     = dict:new() :: dict(),
-              cache     = []         :: [{term(), dict()}]}).
+              mod_deps  = dict:new() :: dict:dict(),
+              table     = dict:new() :: dict:dict(),
+              cache     = []         :: [{term(), dict:dict()}]}).
 
 -opaque plt() :: #plt{}.
 
@@ -55,7 +55,7 @@ new() ->
     #plt{}.
 
 
--spec new(dict(), files()) -> plt().
+-spec new(dict:dict(), files()) -> plt().
 
 new(Table, Filenames) ->
     Checksums = compute_checksums(absolute(Filenames)),
@@ -66,7 +66,7 @@ new(Table, Filenames) ->
 absolute(Filenames) ->
     [filename:absname(F) || F <- Filenames].
 
--spec get_table(plt()) -> dict().
+-spec get_table(plt()) -> dict:dict().
 
 get_table(#plt{table = Table}) ->
     Table.
@@ -74,7 +74,7 @@ get_table(#plt{table = Table}) ->
 
 %% @doc Return the cached version of the table, falling back to the
 %% original one if no cache is found.
--spec get_cache(plt(), purity_utils:options()) -> dict().
+-spec get_cache(plt(), purity_utils:options()) -> dict:dict().
 
 get_cache(#plt{table = Tab, cache = Cache}, Options) ->
     case assoc_find(cache_key(Options), Cache) of
@@ -216,7 +216,7 @@ compute_checksum(Filename) ->
 %% they could have been analysed. This could be because they were
 %% e.g. deleted between the call to analysis and the call to update.
 %% Any module we can't checksum is therefore removed from both tables.
--spec update(plt(), files(), dict(), dict(), purity_utils:options()) -> plt().
+-spec update(plt(), files(), dict:dict(), dict:dict(), purity_utils:options()) -> plt().
 
 update(Plt, ExtraFiles0, Table0, Final0, Options) ->
     #plt{cache = Cache0, checksums = Checksums0, mod_deps = MD0} = Plt,

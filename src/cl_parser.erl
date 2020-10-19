@@ -40,10 +40,10 @@
 
 %% A reference to the finalized description in it's original form
 %% is preserved in `desc', for use with pretty_print/2.
--record(spec, {names    = dict:new() :: dict(),
-               types    = dict:new() :: dict(),
-               help     = dict:new() :: dict(),
-               defaults = dict:new() :: dict(),
+-record(spec, {names    = dict:new() :: dict:dict(),
+               types    = dict:new() :: dict:dict(),
+               help     = dict:new() :: dict:dict(),
+               defaults = dict:new() :: dict:dict(),
                desc     = []         :: desc()}).
 
 

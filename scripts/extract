@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# pylint: disable=missing-function-docstring
+
 """
 Extract expected test results from Erlang source files and write to
 separate files, grouped by option sets.
@@ -16,36 +18,35 @@ where:
 
 """
 
-import os.path, re, sys
+import os.path
+import re
+import sys
 from collections import defaultdict
 
-module = None
-
 def main(argv):
-    global module
     if len(argv) != 3:
-        print>>sys.stderr, "usage: %s <test_file> <output_directory>" % argv[0]
+        sys.stderr.write("usage: %s <test_file> <output_directory>" % argv[0])
         return 1
     filename, outdir = argv[1:]
-    module = os.path.basename(os.path.splitext(filename)[0])
-    with open(filename, 'rb') as fd:
-        opts, data = extract(fd)
-    for i, (k, v) in enumerate(data):
-        print write_tests(outfile(outdir, module, i), opts, k, v)
+    mod0 = os.path.basename(os.path.splitext(filename)[0])
+    with open(filename, 'rb') as filedesc:
+        opts, data = extract(mod0, filedesc)
+    for datum, (key, value) in enumerate(data):
+        print(write_tests(outfile(outdir, mod0, datum), opts, key, value))
     return 0
 
-def outfile(dir, mod, n):
-    return os.path.join(dir, "%s.%s" % (mod, n))
+def outfile(folder, mod, datum):
+    return os.path.join(folder, "%s.%s" % (mod, datum))
 
 def write_tests(filename, gopts, opts, data):
     assert not os.path.exists(filename), "file exists %r" % filename
-    with open(filename, 'w') as fd:
-        fd.write("{%s,\n" % merge_opts(gopts, opts))
-        data = ["{%s,%s}" % (f, v) for (f,v) in data.iteritems()]
-        fd.write(" [" + "\n ,".join(data) + "]}.\n")
+    with open(filename, 'w') as filedesc:
+        filedesc.write("{%s,\n" % merge_opts(gopts, opts))
+        data = ["{%s,%s}" % (fun, value) for (fun, value) in data.items()]
+        filedesc.write(" [" + "\n ,".join(data) + "]}.\n")
     return filename
 
-def extract(lines):
+def extract(mod0, lines):
     opts = None
     tests = defaultdict(dict)
     for line in lines:
@@ -56,7 +57,7 @@ def extract(lines):
                 opts = parse_global(line)
             else:
                 opt, fun, result = parse_test(line)
-                fun = parse_fun(fun)
+                fun = parse_fun(mod0, fun)
                 assert fun not in tests[opt], "duplicate test %r" % fun
                 tests[opt][fun] = result
     return opts, merge_tests(tests)
@@ -64,15 +65,15 @@ def extract(lines):
 def merge_tests(tests):
     """Fill incomplete tests with the corresponding default test."""
     common = tests[None]
-    keys = set(k for v in tests.values() for k in v.keys())
-    for k, v in tests.iteritems():
-        for k in keys:
-            if k not in v and common: # Can't do anything if no common case exists.
-                v[k] = common[k]
+    keys = set(key for value in tests.values() for key in value.keys())
+    for _, value in tests.items():
+        for key in keys:
+            if key not in value and common: # Can't do anything if no common case exists.
+                value[key] = common[key]
     if not common:
         # Remove it, it was just created by the defaultdict.
         del tests[None]
-    return tuple(tests.iteritems())
+    return tuple(tests.items())
 
 def merge_opts(*opts):
     """Merge a list of option lists into a single option list."""
@@ -80,26 +81,26 @@ def merge_opts(*opts):
     return "[%s]" % (','.join(opt[1:-1] for opt in opts if opt))
 
 def is_test(text):
-    return "%<" in text
+    return "%<" in text.decode()
 
 def is_global(text):
     assert is_test(text)
-    return text.lstrip(" %<").startswith("global")
+    return text.decode().lstrip(" %<").startswith("global")
 
 def parse_global(text):
-    return text.replace("global", "").lstrip(" %<")
+    return text.decode().replace("global", "").lstrip(" %<")
 
 def parse_test(text):
-    rgx = re.compile("(?:(\[[^]]*\])\s+)?([^ ]+)\s+(.+)\s*$")
-    return rgx.match(text.lstrip(' %<')).groups()
+    rgx = re.compile(r"(?:(\[[^]]*\])\s+)?([^ ]+)\s+(.+)\s*$")
+    return rgx.match(text.decode().lstrip(' %<')).groups()
 
-def parse_fun(fun):
-    """Convert fun/arity specifications to {module,fun,arity}."""
-    rgx = re.compile("(\w+|'[a-zA-Z0-9_-]+')/(\d)")
-    m = rgx.match(fun)
-    if m is not None:
-        f, a = m.groups()
-        return "{%s,%s,%s}" % (module,f, a)
+def parse_fun(mod0, fun):
+    """Convert fun/arity specifications to {mod0,fun,arity}."""
+    rgx = re.compile(r"(\w+|'[a-zA-Z0-9_-]+')/(\d)")
+    mod = rgx.match(fun)
+    if mod is not None:
+        fun, arity = mod.groups()
+        return "{%s,%s,%s}" % (mod0, fun, arity)
     return fun
 
 

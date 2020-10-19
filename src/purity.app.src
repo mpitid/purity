@@ -12,6 +12,6 @@
              core_aliases,
              cl_parser]},
   {registered, []},
-  {applications, [compiler, stdlib]},
+  {applications, [kernel, compiler, stdlib]},
   {env, []}]}.
 
