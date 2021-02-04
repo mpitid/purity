@@ -25,6 +25,8 @@
 
 -module(purity).
 
+-compile({no_auto_import, [unalias/1]}).
+
 -export([module/2]).
 -export([module/3, modules/3]).
 -export([pmodules/3, panalyse/2]).
